@@ -1,0 +1,17 @@
+[Unit]
+Description=AppImage Launcher observer
+Documentation=man:appimage(1)
+After=dbus.socket
+
+[Service]
+Type=dbus
+BusName=io.github.appimage_launcher.Manager
+ExecStart=@PREFIX@/bin/appimage daemon
+Restart=on-failure
+RestartSec=2
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

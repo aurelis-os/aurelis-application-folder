@@ -1,0 +1,177 @@
+#compdef appimage
+
+_appimage() {
+    local -a commands
+    local -a global_opts
+    local -a install_opts
+    local -a remove_opts
+    local -a update_opts
+    local -a policy_opts
+    local -a origin_opts
+    local -a config_opts
+    local -a completions_opts
+
+    commands=(
+        'daemon:Run observer + D-Bus service in foreground'
+        'install:Install AppImage from any path'
+        'remove:Uninstall AppImage'
+        'rename:Rename AppImage'
+        'list:List installed apps'
+        'info:Show details of an app'
+        'update:Check/apply zsync updates'
+        'policy:Set update policy'
+        'origin:Show, set or clear origin record'
+        'revert:Restore previous version'
+        'versions:List kept and previous versions'
+        'disable:Disable app (move to .disabled)'
+        'enable:Enable app (restore from .disabled)'
+        'run:Launch AppImage'
+        'browse:Mount and browse AppImage contents'
+        'extract:Extract squashfs'
+        'verify:Re-validate AppImage'
+        'reindex:Run reconcile now'
+        'doctor:Environment report'
+        'config:Read/write config'
+        'status:Daemon state'
+        'completions:Print completion script'
+        'export:Export policies, names and flags as JSON'
+        'import:Import policies, names and flags from JSON'
+    )
+
+    global_opts=(
+        '--dir[Applications directory]:directory:_files -/'
+        '--json[Output as JSON]'
+        '--quiet[Suppress non-error output]'
+        '--verbose[Increase verbosity]'
+        '--no-color[Disable colored output]'
+        '--no-daemon[Force direct mode]'
+        '--version[Show version]'
+        '--help[Show help]'
+    )
+
+    install_opts=(
+        '--name[Managed name override]:string:'
+        '--move[Move source file instead of copy]'
+        '--copy[Copy source file (default)]'
+        '--replace[Replace existing app]'
+        '--keep[Keep both versions]'
+        '--cancel[Cancel on conflict]'
+        '--conflict-error[Print conflict payload as JSON and exit 4]'
+        '--origin[Origin record as JSON or @file]:file:_files'
+        '--silent[Suppress success notification]'
+        '--yes[Assume yes to prompts]'
+    )
+
+    remove_opts=(
+        '--keep-file[Leave file in place]'
+        '--purge[Delete permanently]'
+        '--yes[Assume yes to prompts]'
+    )
+
+    update_opts=(
+        '--check[Only check for updates]'
+        '--all[Check all apps]'
+    )
+
+    policy_opts=(
+        'auto:Automatic updates'
+        'manual:Manual updates only'
+        'pinned:Pinned (no updates)'
+    )
+
+    origin_opts=(
+        '--set[Set origin record]:file:_files'
+        '--clear[Clear origin record]'
+    )
+
+    config_opts=(
+        'get:Get config value'
+        'set:Set config value'
+        'list:List all config'
+    )
+
+    completions_opts=(
+        'bash:Bash completion'
+        'zsh:Zsh completion'
+        'fish:Fish completion'
+    )
+
+    _arguments -C \
+        $global_opts \
+        '(-h --help)'{-h,--help}'[Show help]' \
+        '(-v --version)'{-v,--version}'[Show version]' \
+        ':command:($commands)' \
+        '*::arg:->args'
+
+    case $state in
+        (args)
+            case $words[1] in
+                install)
+                    _arguments $install_opts ':file:_files' '*::file:_files'
+                    ;;
+                remove)
+                    _arguments $remove_opts ':name:($(_appimage_installed_apps))' '*::name:($(_appimage_installed_apps))'
+                    ;;
+                rename)
+                    _arguments ':name:($(_appimage_installed_apps))' ':new_name:'
+                    ;;
+                info)
+                    _arguments ':name:($(_appimage_installed_apps))' '--json[Output as JSON]' '--hash[Compute SHA-256]'
+                    ;;
+                update)
+                    _arguments $update_opts ':name:($(_appimage_installed_apps))'
+                    ;;
+                policy)
+                    _arguments ':name:($(_appimage_installed_apps))' ':policy:($policy_opts)'
+                    ;;
+                origin)
+                    _arguments $origin_opts ':name:($(_appimage_installed_apps))'
+                    ;;
+                revert)
+                    _arguments ':name:($(_appimage_installed_apps))'
+                    ;;
+                versions)
+                    _arguments ':name:($(_appimage_installed_apps))'
+                    ;;
+                disable)
+                    _arguments ':name:($(_appimage_installed_apps))'
+                    ;;
+                enable)
+                    _arguments ':name:($(_appimage_installed_apps))'
+                    ;;
+                run)
+                    _arguments ':name:($(_appimage_installed_apps))' '*::args:'
+                    ;;
+                browse)
+                    _arguments ':name:($(_appimage_installed_apps))' '--exec-fallback[Use --appimage-mount]'
+                    ;;
+                extract)
+                    _arguments ':name:($(_appimage_installed_apps))' ':dest:_files -/'
+                    ;;
+                verify)
+                    _arguments ':name:($(_appimage_installed_apps))'
+                    ;;
+                config)
+                    _arguments ':subcommand:($config_opts)' ':key:' ':value:'
+                    ;;
+                completions)
+                    _arguments ':shell:($completions_opts)'
+                    ;;
+                export)
+                    _arguments ':file:_files'
+                    ;;
+                import)
+                    _arguments ':file:_files'
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_appimage_installed_apps() {
+    local apps
+    apps=($(appimage list --json 2>/dev/null | python3 -c "import sys, json; [print(a['managed_name']) for a in json.load(sys.stdin)]" 2>/dev/null))
+    compadd -a apps
+}
+
+_appimage "$@"

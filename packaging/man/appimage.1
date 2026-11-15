@@ -1,0 +1,172 @@
+.TH APPIMAGE 1 "2024-11-14" "AppImage Launcher 0.1.0" "User Commands"
+.SH NAME
+appimage \- AppImage Launcher CLI
+.SH SYNOPSIS
+.B appimage
+[\fIglobal options\fR] \fIcommand\fR [\fIcommand options\fR] [\fIarguments\fR]
+.SH DESCRIPTION
+AppImage Launcher manages AppImages in ~/Applications (or a configured directory).
+It provides a daemon that watches the directory, a CLI for manual operations,
+and a D-Bus API for front-ends like the Aurelis Software Center.
+.SH GLOBAL OPTIONS
+.TP
+\fB--dir\fR \fIPATH\fR
+Applications directory (default: ~/Applications)
+.TP
+\fB--json\fR
+Output as JSON
+.TP
+\fB-q\fR, \fB--quiet\fR
+Suppress non-error output
+.TP
+\fB-v\fR, \fB--verbose\fR
+Increase verbosity (can be repeated)
+.TP
+\fB--no-color\fR
+Disable colored output
+.TP
+\fB--no-daemon\fR
+Force direct mode (bypass D-Bus)
+.TP
+\fB--version\fR
+Show version
+.TP
+\fB--help\fR
+Show help
+.SH COMMANDS
+.TP
+\fBdaemon\fR
+Run observer + D-Bus service in foreground (what systemd starts).
+Options: \fB--dir\fR, \fB--no-notify\fR, \fB--no-dialogs\fR
+.TP
+\fBinstall\fR \fIFILE\fR...
+Install AppImage from any path. Already inside the dir = adopt in place.
+Options:
+.RS
+.TP
+\fB--name\fR \fINAME\fR
+Managed name override
+.TP
+\fB--move\fR | \fB--copy\fR
+Move or copy source file (default: copy)
+.TP
+\fB--replace\fR | \fB--keep\fR | \fB--cancel\fR | \fB--conflict-error\fR
+Conflict policy
+.TP
+\fB--origin\fR \fIJSON\fR|\fB@\fR\fIFILE\fR
+Origin record
+.TP
+\fB--silent\fR
+Suppress success notification
+.TP
+\fB--yes\fR
+Assume yes to prompts
+.RE
+.TP
+\fBremove\fR \fINAME\fR...
+Uninstall AppImage.
+Options: \fB--keep-file\fR, \fB--purge\fR, \fB--yes\fR
+.TP
+\fBrename\fR \fINAME\fR \fINEW\fR
+Rename AppImage; sets name_origin=user. \fB--reset\fR restores embedded Name=.
+.TP
+\fBlist\fR [\fB--json\fR] [\fB--sort\fR \fINAME\fR|\fISIZE\fR|\fIVERSION\fR|\fIDATE\fR] [\fB--all\fR]
+Table of installed apps. \fB--all\fR includes kept/previous versions.
+.TP
+\fBinfo\fR \fINAME\fR|\fIFILE\fR [\fB--json\fR] [\fB--hash\fR]
+Details of an app. If argument is a path to an uninstalled AppImage, prints metadata without installing.
+.TP
+\fBupdate\fR [\fINAME\fR|\fB--all\fR] [\fB--check\fR]
+Check/apply zsync updates. \fB--check\fR exits 0 if none, 10 if updates exist.
+.TP
+\fBpolicy\fR \fINAME\fR \fIauto\fR|\fImanual\fR|\fIpinned\fR
+Set update policy.
+.TP
+\fBorigin\fR \fINAME\fR [\fB--set\fR \fIJSON\fR|\fB@\fR\fIFILE\fR] [\fB--clear\fR]
+Show, set or clear origin record.
+.TP
+\fBrevert\fR \fINAME\fR
+Restore newest .previous version.
+.TP
+\fBversions\fR \fINAME\fR
+List kept and previous versions.
+.TP
+\fBdisable\fR \fINAME\fR / \fBenable\fR \fINAME\fR
+Convenience for uninstall/restore convention (moves to/from .disabled/).
+.TP
+\fBrun\fR \fINAME\fR [\fB--\fR \fIargs\fR]
+Launch AppImage.
+.TP
+\fBbrowse\fR \fINAME\fR [\fB--exec-fallback\fR]
+Mount read-only with squashfuse and open in Dolphin.
+.TP
+\fBextract\fR \fINAME\fR \fIDEST\fR
+Extract squashfs (no execution).
+.TP
+\fBverify\fR \fINAME\fR
+Re-validate file, signature, desktop entry, icon.
+.TP
+\fBreindex\fR
+Run reconcile now.
+.TP
+\fBdoctor\fR
+Environment report: tools, bus, systemd, MIME, notifications, namespaces.
+.TP
+\fBconfig\fR \fIget\fR|\fIset\fR|\fIlist\fR
+Read/write config.toml.
+.TP
+\fBstatus\fR
+Daemon state, watched dir, pending conflicts/updates.
+.TP
+\fBcompletions\fR \fIbash\fR|\fIzsh\fR|\fIfish\fR
+Print completion script.
+.TP
+\fBexport\fR [\fIFILE\fR] / \fBimport\fR \fIFILE\fR
+Export/import policies, names and flags as JSON.
+.SH EXIT CODES
+.TP
+0
+OK
+.TP
+1
+Error
+.TP
+2
+Usage/ambiguous name
+.TP
+3
+Not found
+.TP
+4
+Conflict needs a decision
+.TP
+5
+Invalid or unsupported AppImage
+.TP
+6
+Daemon required but unavailable
+.TP
+10
+Updates available (update --check)
+.SH FILES
+.TP
+\fI~/Applications\fR
+Default applications directory
+.TP
+\fI~/.config/appimage-launcher/config.toml\fR
+User configuration
+.TP
+\fI~/.local/state/appimage-launcher/state.db\fR
+State database
+.TP
+\fI~/.local/share/applications/appimage-*.desktop\fR
+Desktop entries
+.TP
+\fI~/.local/share/icons/hicolor/*/apps/appimage-*.png\fR
+Icons
+.SH SEE ALSO
+.BR appimage-launcher (7),
+.BR systemd (1),
+.BR dbus (1)
+.SH AUTHORS
+AppImage Launcher Contributors

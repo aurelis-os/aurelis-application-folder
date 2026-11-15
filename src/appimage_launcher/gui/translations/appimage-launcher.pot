@@ -1,0 +1,182 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the PACKAGE package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: appimage-launcher 0.1\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-11-14 20:19+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: dialogs/conflict.py:55
+msgid "<b>%s</b> is already installed. A new version was dropped in the Applications folder."
+msgstr ""
+
+#: dialogs/conflict.py:67
+msgid "<b>Change:</b> %s"
+msgstr ""
+
+#: dialogs/conflict.py:73
+msgid "What would you like to do?"
+msgstr ""
+
+#: dialogs/conflict.py:76
+msgid "Replace"
+msgstr ""
+
+#: dialogs/conflict.py:82
+msgid "Keep both (rename old)"
+msgstr ""
+
+#: dialogs/conflict.py:93
+msgid "Cancel"
+msgstr ""
+
+#: dialogs/conflict.py:101
+msgid "Remember my choice for this app"
+msgstr ""
+
+#: dialogs/conflict.py:105
+msgid "Show details…"
+msgstr ""
+
+#: dialogs/conflict.py:126
+msgid "Currently Installed"
+msgstr ""
+
+#: dialogs/conflict.py:158
+msgid "New AppImage"
+msgstr ""
+
+#: dialogs/conflict.py:253
+msgid "Conflict Details"
+msgstr ""
+
+#: dialogs/rename.py:38
+msgid "Rename App"
+msgstr ""
+
+#: dialogs/rename.py:50
+msgid "Rename <b>%s</b>"
+msgstr ""
+
+#: dialogs/rename.py:58
+msgid "Current:"
+msgstr ""
+
+#: dialogs/rename.py:69
+msgid "New name:"
+msgstr ""
+
+#: dialogs/rename.py:71
+msgid "Enter new name..."
+msgstr ""
+
+#: dialogs/rename.py:80
+msgid "Preview:"
+msgstr ""
+
+#: dialogs/rename.py:95
+msgid "Reset to default name"
+msgstr ""
+
+#: dialogs/rename.py:137
+msgid "Name cannot be empty"
+msgstr ""
+
+#: dialogs/rename.py:147
+msgid "Name cannot end with '%s'"
+msgstr ""
+
+#: dialogs/rename.py:153
+msgid "Name cannot start with '.' or space"
+msgstr ""
+
+#: dialogs/rename.py:159
+msgid "Name cannot end with '.' or space"
+msgstr ""
+
+#: dialogs/rename.py:166
+msgid "An app named '%s' already exists"
+msgstr ""
+
+#: dialogs/rename.py:173
+msgid "Name too long (max 100 bytes)"
+msgstr ""
+
+#: dialogs/update.py:36
+msgid "AppImage Update"
+msgstr ""
+
+#: dialogs/update.py:63
+msgid "Checking for updates..."
+msgstr ""
+
+#: dialogs/update.py:92
+msgid "<b>Updating %s</b><br/>Current version: %s → Latest: %s"
+msgstr ""
+
+#: dialogs/update.py:98
+msgid "View release notes"
+msgstr ""
+
+#: dialogs/update.py:103
+msgid "✓ This AppImage is signed. Signature will be verified."
+msgstr ""
+
+#: dialogs/update.py:108
+msgid "⚠ This AppImage is not signed. Proceed with caution."
+msgstr ""
+
+#: dialogs/update.py:118
+msgid "<b>Update complete!</b>"
+msgstr ""
+
+#: dialogs/update.py:124
+msgid "<b>Update failed</b>"
+msgstr ""
+
+#: dialogs/error.py:33
+msgid "Error Details"
+msgstr ""
+
+#: dialogs/error.py:46
+msgid "Error"
+msgstr ""
+
+#: dialogs/error.py:84
+msgid "An unknown error occurred"
+msgstr ""
+
+#: dialogs/error.py:93
+msgid "(No additional details)"
+msgstr ""
+
+#: dialogs/error.py:72
+msgid "Copy to clipboard"
+msgstr ""
+
+#: dialogs/error.py:102
+msgid "Copied!"
+msgstr ""
+
+#: main.py:97
+msgid "AppImage Launcher GUI helper dialogs"
+msgstr ""
+
+#: main.py:101
+msgid "Dialog kind to show"
+msgstr ""
+
+#: main.py:107
+msgid "Timeout in seconds (0 = no timeout)"
+msgstr ""

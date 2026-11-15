@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.appimage_launcher.Manager
+Exec=@PREFIX@/bin/appimage daemon
+SystemdService=appimage-launcher.service

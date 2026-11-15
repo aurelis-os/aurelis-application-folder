@@ -1,0 +1,27 @@
+# AppImage Launcher default configuration
+# This file is installed to /etc/appimage-launcher/config.toml
+# User config at ~/.config/appimage-launcher/config.toml overrides this
+
+applications_dir = "~/Applications"
+
+[install]
+source_action = "copy"      # copy | move
+conflict_policy = "ask"     # ask | replace | keep
+
+[naming]
+template = "{name}"
+keep_template = "{name} {version}"
+
+[update]
+on_self_update = "replace"     # replace | keep | ask
+rename_policy = "after_quit"   # after_quit | never
+check_interval = "1d"          # 0 disables background checks
+previous_versions_keep = 1
+skip_catalog_linked = true     # apps with origin are updated by their front-end
+
+[notifications]
+enabled = true
+timeout = 20                   # seconds; default action on timeout is non-destructive
+
+[gui]
+use_dialogs = true             # false = notifications only

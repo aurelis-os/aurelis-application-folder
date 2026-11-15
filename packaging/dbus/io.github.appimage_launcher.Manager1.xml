@@ -1,0 +1,76 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="io.github.appimage_launcher.Manager1">
+    <method name="Inspect">
+      <arg name="path" type="s" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <method name="Install">
+      <arg name="path" type="s" direction="in"/>
+      <arg name="options" type="a{sv}" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <method name="Remove">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="options" type="a{sv}" direction="in"/>
+    </method>
+    <method name="Rename">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="new_name" type="s" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <method name="List">
+      <arg name="options" type="a{sv}" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <method name="Info">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <method name="SetPolicy">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="policy" type="s" direction="in"/>
+    </method>
+    <method name="CheckUpdates">
+      <arg name="names" type="as" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <method name="Update">
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="Revert">
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="ResolveConflict">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="decision" type="s" direction="in"/>
+      <arg name="remember" type="b" direction="in"/>
+    </method>
+    <method name="Reindex">
+    </method>
+    <method name="SetOrigin">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="origin_json" type="s" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
+    </method>
+    <signal name="AppsChanged">
+      <arg name="kind" type="s"/>
+      <arg name="app_id" type="s"/>
+      <arg name="source" type="s"/>
+    </signal>
+    <signal name="ConflictPending">
+      <arg name="id" type="s"/>
+      <arg name="json" type="s"/>
+    </signal>
+    <signal name="UpdateProgress">
+      <arg name="name" type="s"/>
+      <arg name="percent" type="i"/>
+      <arg name="state" type="s"/>
+    </signal>
+    <property name="ApplicationsDir" type="s" access="read"/>
+    <property name="Version" type="s" access="read"/>
+    <property name="APIVersion" type="u" access="read"/>
+    <property name="Capabilities" type="as" access="read"/>
+  </interface>
+</node>

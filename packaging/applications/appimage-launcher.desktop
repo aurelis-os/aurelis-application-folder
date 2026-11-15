@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=AppImage Launcher
+Comment=AppImage management daemon
+Exec=appimage daemon
+NoDisplay=true
+StartupNotify=false
+Categories=System;Settings;
+X-AppImage-Launcher=daemon

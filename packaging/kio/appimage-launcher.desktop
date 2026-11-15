@@ -1,0 +1,44 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=KonqPopupMenu/Plugin
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+X-KDE-MimeType=application/vnd.appimage;application/x-iso9660-appimage;
+X-KDE-Priority=TopLevel
+X-KDE-StartupNotify=false
+Name=AppImage Launcher
+X-KDE-Actions=Install;Browse;Rename;Disable;Update;Pin;ShowContents;
+
+[Desktop Action Install]
+Name=Install to Applications
+Icon=application-x-executable
+Exec=appimage install %F
+
+[Desktop Action Browse]
+Name=Browse AppImage contents
+Icon=folder
+Exec=appimage browse %f
+
+[Desktop Action Rename]
+Name=Rename with default name
+Icon=edit-rename
+Exec=appimage rename %f --reset
+
+[Desktop Action Disable]
+Name=Disable (remove from menu)
+Icon=dialog-close
+Exec=appimage disable %f
+
+[Desktop Action Update]
+Name=Check for updates
+Icon=system-software-update
+Exec=appimage update %f --check
+
+[Desktop Action Pin]
+Name=Pin / Unpin updates
+Icon=emblem-favorite
+Exec=sh -c 'appimage policy %f pinned || appimage policy %f auto'
+
+[Desktop Action ShowContents]
+Name=Show package contents
+Icon=package-x-generic
+Exec=appimage browse %f
