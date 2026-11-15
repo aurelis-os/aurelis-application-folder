@@ -336,11 +336,17 @@ Examples:
 
     # dedupe command
     dedupe_parser = subparsers.add_parser("dedupe", help="Find duplicate AppImages by hash")
-    dedupe_parser.add_argument("dirs", nargs="*", type=Path, help="Directories to scan (default: ~/Downloads)")
+    dedupe_parser.add_argument(
+        "dirs", nargs="*", type=Path, help="Directories to scan (default: ~/Downloads)"
+    )
 
     # cleanup command
-    cleanup_parser = subparsers.add_parser("cleanup", help="Remove old .previous files and orphaned entries/icons")
-    cleanup_parser.add_argument("--days", type=int, default=30, help="Remove .previous older than N days (default: 30)")
+    cleanup_parser = subparsers.add_parser(
+        "cleanup", help="Remove old .previous files and orphaned entries/icons"
+    )
+    cleanup_parser.add_argument(
+        "--days", type=int, default=30, help="Remove .previous older than N days (default: 30)"
+    )
 
     return parser
 
@@ -568,10 +574,12 @@ class DBusClientManager:
     def export_data(self):
         result_json = self._call("Export")
         import json
+
         return json.loads(result_json)
 
     def import_data(self, data):
         import json
+
         self._call("Import", json.dumps(data))
         return 0
 
@@ -1376,6 +1384,7 @@ def cmd_export(args: argparse.Namespace, manager: Manager) -> int:
 def cmd_import(args: argparse.Namespace, manager: Manager) -> int:
     """Handle import command."""
     import json
+
     data = json.loads(args.file.read_text())
     imported = manager.import_data(data)
     if not args.quiet:
@@ -1410,7 +1419,9 @@ def cmd_cleanup(args: argparse.Namespace, manager: Manager) -> int:
     if args.json:
         print_json(result)
     else:
-        print_info(f"Removed {result['removed_previous']} previous version(s) ({format_size(result['removed_previous_size'])})")
+        print_info(
+            f"Removed {result['removed_previous']} previous version(s) ({format_size(result['removed_previous_size'])})"
+        )
         print_info(f"Removed {result['removed_entries']} orphaned desktop entry(ies)")
         print_info(f"Removed {result['removed_icons']} orphaned icon(s)")
 

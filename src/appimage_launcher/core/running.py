@@ -172,7 +172,7 @@ class RunningTracker:
                 # Try finding by app_id in recent tombstones
                 import time
 
-                cutoff = time.time() - 30  # 30 seconds
+                _ = time.time() - 30  # 30 seconds
                 # We need to check recent tombstones for this app_id
                 # For now, check if there's a tombstone with matching app_id
                 # This would require a new DB method, but we can check via fingerprint

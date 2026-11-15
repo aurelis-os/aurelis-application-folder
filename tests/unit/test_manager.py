@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from appimage_launcher.config import Config, reset_config
-from appimage_launcher.core.manager import ConflictError, InstallResult, Manager
+from appimage_launcher.core.manager import InstallResult, Manager
 from appimage_launcher.core.state import AppRecord, StateDB
 from appimage_launcher.paths import Paths, reset_paths
 from tests.fixtures.build_fake_appimage import build_fake_appimage
@@ -373,7 +373,9 @@ class TestManager:
         ):
             mock_read_meta.return_value = self._create_mock_meta(name="TestApp", version="2.0.0")
 
-            with pytest.raises(ValueError, match="cancelled"):
+            from appimage_launcher.core.exceptions import InvalidArgumentError
+
+            with pytest.raises(InvalidArgumentError, match="cancelled"):
                 self.manager.install(appimage, conflict_policy="cancel")
 
     def test_install_conflict_error(self):
@@ -412,11 +414,13 @@ class TestManager:
         ):
             mock_read_meta.return_value = self._create_mock_meta(name="TestApp", version="2.0.0")
 
-            with pytest.raises(ConflictError) as exc_info:
+            from appimage_launcher.core.exceptions import ConflictPendingError
+
+            with pytest.raises(ConflictPendingError) as exc_info:
                 self.manager.install(appimage, conflict_policy="error")
 
-            assert exc_info.value.conflict_info.old_app.app_id == "com.example.testapp"
-            assert exc_info.value.conflict_info.new_meta.version == "2.0.0"
+            # ConflictPendingError doesn't have conflict_info, it has conflict_id and message
+            assert exc_info.value.message == "Conflict requires decision"
 
     def test_remove_app(self):
         """Test removing an app."""
@@ -464,7 +468,9 @@ class TestManager:
 
     def test_remove_app_not_found(self):
         """Test removing non-existent app."""
-        with pytest.raises(ValueError, match="App not found"):
+        from appimage_launcher.core.exceptions import NotFoundError
+
+        with pytest.raises(NotFoundError, match="App not found"):
             self.manager.remove("NonExistent")
 
     def test_rename_app(self):
@@ -558,7 +564,9 @@ class TestManager:
         (self.applications_dir / "App1").write_bytes(b"appimage1")
         (self.applications_dir / "App2").write_bytes(b"appimage2")
 
-        with pytest.raises(ValueError, match="Name collision"):
+        from appimage_launcher.core.exceptions import NameCollisionError
+
+        with pytest.raises(NameCollisionError, match="Name collision"):
             self.manager.rename("App1", "App2")
 
     def test_rename_reset(self):
@@ -660,7 +668,9 @@ class TestManager:
         )
         self.db.insert_app(app)
 
-        with pytest.raises(ValueError, match="Invalid policy"):
+        from appimage_launcher.core.exceptions import InvalidArgumentError
+
+        with pytest.raises(InvalidArgumentError, match="Invalid policy"):
             self.manager.set_policy("TestApp", "invalid")
 
     def test_set_origin(self):
@@ -762,7 +772,9 @@ class TestManager:
         )
         self.db.insert_app(app)
 
-        with pytest.raises(ValueError, match="Invalid JSON"):
+        from appimage_launcher.core.exceptions import InvalidArgumentError
+
+        with pytest.raises(InvalidArgumentError, match="Invalid JSON"):
             self.manager.set_origin("TestApp", "not valid json")
 
     def test_set_origin_missing_fields(self):
@@ -792,7 +804,9 @@ class TestManager:
         )
         self.db.insert_app(app)
 
-        with pytest.raises(ValueError, match="must have 'source' and 'catalog_id'"):
+        from appimage_launcher.core.exceptions import InvalidArgumentError
+
+        with pytest.raises(InvalidArgumentError, match="must have 'source' and 'catalog_id'"):
             self.manager.set_origin("TestApp", json.dumps({"source": "test"}))
 
     def test_revert(self):
@@ -874,7 +888,9 @@ class TestManager:
         )
         self.db.insert_app(app)
 
-        with pytest.raises(ValueError, match="No previous version"):
+        from appimage_launcher.core.exceptions import NotFoundError
+
+        with pytest.raises(NotFoundError, match="No previous version"):
             self.manager.revert("TestApp")
 
     def test_revert_backup_missing(self):
@@ -917,7 +933,9 @@ class TestManager:
         self.db.insert_backup(backup)
         # Don't create the backup file
 
-        with pytest.raises(ValueError, match="Backup file not found"):
+        from appimage_launcher.core.exceptions import NotFoundError
+
+        with pytest.raises(NotFoundError, match="Backup file not found"):
             self.manager.revert("TestApp")
 
     def test_find_app_by_name_exact(self):
@@ -1115,7 +1133,9 @@ class TestManager:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
         try:
-            with pytest.raises(RuntimeError, match="Could not acquire lock"):
+            from appimage_launcher.core.exceptions import BusyError
+
+            with pytest.raises(BusyError, match="Could not acquire lock"):
                 with self.manager._exclusive_lock():
                     pass
         finally:

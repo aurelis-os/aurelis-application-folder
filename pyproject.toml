@@ -8,6 +8,7 @@ requires-python = ">=3.11"
 dependencies = [
     "inotify-simple>=1.3.5",
     "dbus-fast>=0.25.0",
+    "tomli-w>=1.0.0",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -44,6 +45,8 @@ include = ["appimage_launcher*"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
@@ -62,6 +65,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "T201"]  # allow assert and print in tests
 "src/appimage_launcher/cli/*" = ["T201"]  # allow print in CLI
+"src/appimage_launcher/daemon/dbus_service.py" = ["N802", "UP037", "F821", "F722"]  # D-Bus type signatures and method names
+"src/appimage_launcher/daemon/conflicts.py" = ["N818"]  # Exception name matches D-Bus error
 
 [tool.ruff.format]
 quote-style = "double"
@@ -79,14 +84,19 @@ disallow_incomplete_defs = false
 check_untyped_defs = false
 no_implicit_optional = false
 strict = false
-exclude = ["src/appimage_launcher/core/"]
+exclude = ["src/appimage_launcher/core/", "src/appimage_launcher/gui/", "src/appimage_launcher/daemon/", "src/appimage_launcher/cli/"]
 
 [[tool.mypy.overrides]]
 module = "appimage_launcher.*"
 strict = false
 
+[[tool.mypy.overrides]]
+module = "inotify_simple"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

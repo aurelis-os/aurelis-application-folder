@@ -236,7 +236,7 @@ class ConflictHandler:
 
         # Return a pending result - the actual install happens when resolved
         # This is a special case - we need to wait for user decision
-        raise ConflictPending(conflict_id, old_app, new_meta, relation, is_self_update)
+        raise ConflictPendingError(conflict_id, old_app, new_meta, relation, is_self_update)
 
     def resolve_conflict(
         self,
@@ -308,7 +308,7 @@ class ConflictHandler:
         return result
 
 
-class ConflictPending(Exception):
+class ConflictPendingError(Exception):
     """Raised when a conflict needs user decision (policy=ask or error)."""
 
     def __init__(
@@ -327,7 +327,7 @@ class ConflictPending(Exception):
         super().__init__(f"Conflict pending: {conflict_id}")
 
 
-def format_conflict_payload(conflict: ConflictPending) -> dict:
+def format_conflict_payload(conflict: ConflictPendingError) -> dict:
     """Format conflict info for D-Bus signal."""
     return {
         "id": conflict.conflict_id,

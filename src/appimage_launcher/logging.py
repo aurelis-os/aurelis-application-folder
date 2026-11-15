@@ -100,7 +100,7 @@ def setup_logging(verbose: int = 0) -> None:
     logging.getLogger("asyncio").setLevel(logging.WARNING)
 
 
-def get_logger(name: str) -> logging.Logger:
+def get_logger(name: str) -> LoggerAdapter:
     """Get a logger instance for the given module name."""
     logger = logging.getLogger(name)
     # Wrap with LoggerAdapter to handle extra keyword arguments
@@ -134,4 +134,10 @@ class LoggerAdapter(logging.LoggerAdapter[logging.Logger]):
 def get_context_logger(name: str, **context: Any) -> LoggerAdapter:
     """Get a logger with persistent context fields."""
     logger = get_logger(name)
-    return LoggerAdapter(logger, context)
+    # get_logger returns a LoggerAdapter, so we need to get the underlying logger
+    base_logger: logging.Logger
+    if isinstance(logger, LoggerAdapter):
+        base_logger = logger.logger
+    else:
+        base_logger = logger
+    return LoggerAdapter(base_logger, context)

@@ -10,11 +10,11 @@ Layered configuration with precedence:
 from __future__ import annotations
 
 import os
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import tomli
 import tomli_w
 
 from appimage_launcher.constants import (
@@ -225,7 +225,7 @@ def load_config() -> Config:
     if SYSTEM_CONFIG_PATH.exists():
         try:
             with open(SYSTEM_CONFIG_PATH, "rb") as f:
-                system_data = tomli.load(f)
+                system_data = tomllib.load(f)
             config = Config.from_dict(system_data)
         except Exception:
             # Ignore system config errors, use defaults
@@ -236,7 +236,7 @@ def load_config() -> Config:
     if user_config_path.exists():
         try:
             with open(user_config_path, "rb") as f:
-                user_data = tomli.load(f)
+                user_data = tomllib.load(f)
             user_config = Config.from_dict(user_data)
             # Merge user config over system config
             config = _merge_configs(config, user_config)

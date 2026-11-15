@@ -179,6 +179,8 @@ def set_dev_mode(enabled: bool) -> None:
         tmpdir = tempfile.mkdtemp(prefix="appimage-launcher-dev-")
         os.environ["APPIMAGE_LAUNCHER_HOME"] = tmpdir
     else:
+        import os
+
         if "APPIMAGE_LAUNCHER_HOME" in os.environ:
             del os.environ["APPIMAGE_LAUNCHER_HOME"]
     reset_paths()

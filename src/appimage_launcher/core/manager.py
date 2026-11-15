@@ -17,6 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from appimage_launcher.config import get_config
+from appimage_launcher.core.exceptions import (
+    AmbiguousError,
+    BusyError,
+    ConflictPendingError,
+    InvalidArgumentError,
+    NameCollisionError,
+    NotFoundError,
+)
 from appimage_launcher.core.identity import compute_full_sha256
 from appimage_launcher.core.integration import (
     ensure_executable,
@@ -95,7 +103,7 @@ class Manager:
             fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             yield
         except BlockingIOError as e:
-            raise RuntimeError("Could not acquire lock (another operation in progress)") from e
+            raise BusyError("Could not acquire lock (another operation in progress)") from e
         finally:
             if self._lock_file:
                 fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
@@ -144,7 +152,7 @@ class Manager:
         collision = classify_collision(target_path, meta.app_id, existing_apps)
 
         if collision.type == "non_appimage":
-            raise ValueError(f"Name collision with non-AppImage: {target_name}")
+            raise NameCollisionError(f"Name collision with non-AppImage: {target_name}")
         elif collision.type == "same_app_id":
             # Handle conflict
             return self._handle_conflict(
@@ -194,7 +202,7 @@ class Manager:
         is_self_update: bool = False,
     ) -> InstallResult:
         """Handle conflict with existing app."""
-        relation = compare_versions(old_app.version, new_meta.version)
+        compare_versions(old_app.version, new_meta.version)
 
         if conflict_policy == "config":
             conflict_policy = self.config.install.conflict_policy
@@ -215,12 +223,15 @@ class Manager:
                 old_app, new_meta, source_path, source_action, origin, silent, update_policy
             )
         elif conflict_policy == "cancel":
-            raise ValueError("Install cancelled due to conflict")
+            raise InvalidArgumentError("Install cancelled due to conflict")
         elif conflict_policy == "error":
             # Return conflict info for caller to handle
-            raise ConflictError(ConflictInfo(old_app, new_meta, relation, is_self_update))
+            raise ConflictPendingError(
+                conflict_id="",  # Will be set by caller
+                message="Conflict requires decision",
+            )
         else:
-            raise ValueError(f"Unknown conflict policy: {conflict_policy}")
+            raise InvalidArgumentError(f"Unknown conflict policy: {conflict_policy}")
 
     def _replace_app(
         self,
@@ -362,13 +373,11 @@ class Manager:
 
         # Write xattr for original name
         try:
-            import xattr
-
-            xattr.setxattr(str(target_path), "user.appimage.origname", source_path.name.encode())
+            os.setxattr(str(target_path), "user.appimage.origname", source_path.name.encode())
             if origin:
-                xattr.setxattr(str(target_path), "user.appimage.origin", origin.encode())
-        except Exception:
-            pass
+                os.setxattr(str(target_path), "user.appimage.origin", origin.encode())
+        except OSError as e:
+            logger.warning("Failed to set xattr", path=str(target_path), error=str(e))
 
         # Write desktop entry
         write_desktop_entry(
@@ -477,7 +486,7 @@ class Manager:
         """Remove an app by managed name."""
         app = self._find_app_by_name(name)
         if not app:
-            raise ValueError(f"App not found: {name}")
+            raise NotFoundError(f"App not found: {name}")
 
         # Remove desktop entry and icons
         remove_desktop_entry(app.app_id)
@@ -536,7 +545,7 @@ class Manager:
         """Rename an app."""
         app = self._find_app_by_name(name)
         if not app:
-            raise ValueError(f"App not found: {name}")
+            raise NotFoundError(f"App not found: {name}")
 
         if reset:
             new_name = sanitize_name(app.display_name)
@@ -551,7 +560,7 @@ class Manager:
         existing_apps = self._get_existing_apps_dict()
         collision = classify_collision(target_path, app.app_id, existing_apps)
         if collision.type != "none":
-            raise ValueError(f"Name collision: {new_name}")
+            raise NameCollisionError(f"Name collision: {new_name}")
 
         # Rename file
         old_path = Path(app.path)
@@ -598,10 +607,10 @@ class Manager:
         """Set update policy for an app."""
         app = self._find_app_by_name(name)
         if not app:
-            raise ValueError(f"App not found: {name}")
+            raise NotFoundError(f"App not found: {name}")
 
         if policy not in ("auto", "manual", "pinned"):
-            raise ValueError(f"Invalid policy: {policy}")
+            raise InvalidArgumentError(f"Invalid policy: {policy}")
 
         app.update_policy = policy
         app.updated_at = int(time.time())
@@ -629,16 +638,16 @@ class Manager:
         """Set or clear origin record."""
         app = self._find_app_by_name(name)
         if not app:
-            raise ValueError(f"App not found: {name}")
+            raise NotFoundError(f"App not found: {name}")
 
         if origin_json:
             # Validate JSON
             try:
                 origin_data = json.loads(origin_json)
                 if "source" not in origin_data or "catalog_id" not in origin_data:
-                    raise ValueError("Origin must have 'source' and 'catalog_id'")
+                    raise InvalidArgumentError("Origin must have 'source' and 'catalog_id'")
             except json.JSONDecodeError as e:
-                raise ValueError("Invalid JSON") from e
+                raise InvalidArgumentError("Invalid JSON") from e
 
             app.origin = origin_json
         else:
@@ -649,14 +658,12 @@ class Manager:
 
         # Update xattr
         try:
-            import xattr
-
             if app.origin:
-                xattr.setxattr(str(app.path), "user.appimage.origin", app.origin.encode())
+                os.setxattr(str(app.path), "user.appimage.origin", app.origin.encode())
             else:
-                xattr.removexattr(str(app.path), "user.appimage.origin")
-        except Exception:
-            pass
+                os.removexattr(str(app.path), "user.appimage.origin")
+        except OSError as e:
+            logger.warning("Failed to set/remove xattr", path=str(app.path), error=str(e))
 
         # Update desktop entry
         catalog_id = None
@@ -692,16 +699,16 @@ class Manager:
         """Revert to previous version."""
         app = self._find_app_by_name(name)
         if not app:
-            raise ValueError(f"App not found: {name}")
+            raise NotFoundError(f"App not found: {name}")
 
         backups = self.db.get_backups(app.app_id)
         if not backups:
-            raise ValueError("No previous version to revert to")
+            raise NotFoundError("No previous version to revert to")
 
         latest_backup = backups[0]
         backup_path = Path(latest_backup.path)
         if not backup_path.exists():
-            raise ValueError("Backup file not found")
+            raise NotFoundError("Backup file not found")
 
         # Move current to staging
         current_path = Path(app.path)
@@ -748,16 +755,22 @@ class Manager:
         matches = [a for a in apps if a.managed_name.lower() == name.lower()]
         if len(matches) == 1:
             return matches[0]
+        elif len(matches) > 1:
+            raise AmbiguousError(f"Ambiguous name: {name} matches multiple apps")
 
         # Try prefix match
         matches = [a for a in apps if a.managed_name.lower().startswith(name.lower())]
         if len(matches) == 1:
             return matches[0]
+        elif len(matches) > 1:
+            raise AmbiguousError(f"Ambiguous name: {name} matches multiple apps")
 
         # Try app_id match
         matches = [a for a in apps if a.app_id.lower() == name.lower()]
         if len(matches) == 1:
             return matches[0]
+        elif len(matches) > 1:
+            raise AmbiguousError(f"Ambiguous app_id: {name} matches multiple apps")
 
         return None
 
@@ -765,7 +778,7 @@ class Manager:
         """Disable an app (move to .disabled directory)."""
         app = self._find_app_by_name(name)
         if not app:
-            raise ValueError(f"App not found: {name}")
+            raise NotFoundError(f"App not found: {name}")
 
         # Create .disabled directory
         disabled_dir = self.paths.applications_dir / ".disabled"
@@ -783,6 +796,7 @@ class Manager:
 
         # Create tombstone to preserve settings
         import time
+
         tombstone = TombstoneRecord(
             id=0,
             app_id=app.app_id,
@@ -821,13 +835,13 @@ class Manager:
                 break
 
         if not tombstone:
-            raise ValueError(f"No disabled app found: {name}")
+            raise NotFoundError(f"No disabled app found: {name}")
 
         disabled_dir = self.paths.applications_dir / ".disabled"
         source_path = disabled_dir / tombstone.last_name
 
         if not source_path.exists():
-            raise ValueError(f"Disabled file not found: {source_path}")
+            raise NotFoundError(f"Disabled file not found: {source_path}")
 
         # Read metadata from the file
         meta = read_appimage_meta(source_path)
@@ -1188,12 +1202,14 @@ class Manager:
                             continue
                         sha256 = compute_full_sha256(file_path)
                         if sha256 in app_hashes:
-                            duplicates.append({
-                                "installed_app": app_hashes[sha256].managed_name,
-                                "installed_path": app_hashes[sha256].path,
-                                "duplicate_path": str(file_path),
-                                "size": file_path.stat().st_size,
-                            })
+                            duplicates.append(
+                                {
+                                    "installed_app": app_hashes[sha256].managed_name,
+                                    "installed_path": app_hashes[sha256].path,
+                                    "duplicate_path": str(file_path),
+                                    "size": file_path.stat().st_size,
+                                }
+                            )
                     except Exception:
                         pass
 

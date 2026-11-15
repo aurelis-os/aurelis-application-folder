@@ -77,7 +77,7 @@ def write_desktop_entry(
 ) -> Path:
     """Write a desktop entry file atomically."""
     paths = get_paths()
-    config = get_config()
+    _ = get_config()
 
     # Determine entry name
     if role == "kept" and version_slug:
@@ -287,6 +287,6 @@ def desktop_entry_exists(
 def icon_exists(app_id: str) -> bool:
     """Check if any icon exists for an app."""
     paths = get_paths()
-    for icon in paths.icons_data_dir.rglob(f"{ICON_PREFIX}{app_id}.*"):
+    for _icon in paths.icons_data_dir.rglob(f"{ICON_PREFIX}{app_id}.*"):
         return True
     return False

@@ -100,61 +100,61 @@ def run_dialog(kind: str, request: dict, timeout: int | None = None) -> dict:
         return {"cancelled": True}
 
 
-def _apply_system_theme(app, QPalette, QColor) -> None:
+def _apply_system_theme(app, qpalette, qcolor) -> None:
     """Apply system theme (dark/light) to the application."""
     try:
         # Check if system is using dark theme
         palette = app.palette()
-        window_color = palette.color(QPalette.ColorRole.Window)
+        window_color = palette.color(qpalette.ColorRole.Window)
         # If window background is dark, assume dark theme
         if window_color.lightness() < 128:
             # Already dark, ensure consistent styling
-            _apply_dark_theme(app, QPalette, QColor)
+            _apply_dark_theme(app, qpalette, qcolor)
         else:
             # Light theme - ensure consistent styling
-            _apply_light_theme(app, QPalette, QColor)
+            _apply_light_theme(app, qpalette, qcolor)
     except Exception:
         # Fallback: no theme applied
         pass
 
 
-def _apply_dark_theme(app, QPalette, QColor) -> None:
+def _apply_dark_theme(app, qpalette, qcolor) -> None:
     """Apply a consistent dark theme."""
-    dark_palette = QPalette()
-    dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
-    dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
-    dark_palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
-    dark_palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-    dark_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-    dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(35, 35, 35))
-    dark_palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(127, 127, 127))
+    dark_palette = qpalette()
+    dark_palette.setColor(qpalette.ColorRole.Window, qcolor(53, 53, 53))
+    dark_palette.setColor(qpalette.ColorRole.WindowText, qcolor(255, 255, 255))
+    dark_palette.setColor(qpalette.ColorRole.Base, qcolor(35, 35, 35))
+    dark_palette.setColor(qpalette.ColorRole.AlternateBase, qcolor(53, 53, 53))
+    dark_palette.setColor(qpalette.ColorRole.ToolTipBase, qcolor(255, 255, 255))
+    dark_palette.setColor(qpalette.ColorRole.ToolTipText, qcolor(255, 255, 255))
+    dark_palette.setColor(qpalette.ColorRole.Text, qcolor(255, 255, 255))
+    dark_palette.setColor(qpalette.ColorRole.Button, qcolor(53, 53, 53))
+    dark_palette.setColor(qpalette.ColorRole.ButtonText, qcolor(255, 255, 255))
+    dark_palette.setColor(qpalette.ColorRole.BrightText, qcolor(255, 0, 0))
+    dark_palette.setColor(qpalette.ColorRole.Link, qcolor(42, 130, 218))
+    dark_palette.setColor(qpalette.ColorRole.Highlight, qcolor(42, 130, 218))
+    dark_palette.setColor(qpalette.ColorRole.HighlightedText, qcolor(35, 35, 35))
+    dark_palette.setColor(qpalette.ColorRole.PlaceholderText, qcolor(127, 127, 127))
     app.setPalette(dark_palette)
 
 
-def _apply_light_theme(app, QPalette, QColor) -> None:
+def _apply_light_theme(app, qpalette, qcolor) -> None:
     """Apply a consistent light theme."""
-    light_palette = QPalette()
-    light_palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
-    light_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
-    light_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
-    light_palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-    light_palette.setColor(QPalette.ColorRole.Link, QColor(0, 0, 255))
-    light_palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 215))
-    light_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
-    light_palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(127, 127, 127))
+    light_palette = qpalette()
+    light_palette.setColor(qpalette.ColorRole.Window, qcolor(240, 240, 240))
+    light_palette.setColor(qpalette.ColorRole.WindowText, qcolor(0, 0, 0))
+    light_palette.setColor(qpalette.ColorRole.Base, qcolor(255, 255, 255))
+    light_palette.setColor(qpalette.ColorRole.AlternateBase, qcolor(240, 240, 240))
+    light_palette.setColor(qpalette.ColorRole.ToolTipBase, qcolor(255, 255, 255))
+    light_palette.setColor(qpalette.ColorRole.ToolTipText, qcolor(0, 0, 0))
+    light_palette.setColor(qpalette.ColorRole.Text, qcolor(0, 0, 0))
+    light_palette.setColor(qpalette.ColorRole.Button, qcolor(240, 240, 240))
+    light_palette.setColor(qpalette.ColorRole.ButtonText, qcolor(0, 0, 0))
+    light_palette.setColor(qpalette.ColorRole.BrightText, qcolor(255, 0, 0))
+    light_palette.setColor(qpalette.ColorRole.Link, qcolor(0, 0, 255))
+    light_palette.setColor(qpalette.ColorRole.Highlight, qcolor(0, 120, 215))
+    light_palette.setColor(qpalette.ColorRole.HighlightedText, qcolor(255, 255, 255))
+    light_palette.setColor(qpalette.ColorRole.PlaceholderText, qcolor(127, 127, 127))
     app.setPalette(light_palette)
 
 

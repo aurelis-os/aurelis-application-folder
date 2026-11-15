@@ -115,7 +115,7 @@ Categories={";".join(categories)};"""
 
 def build_elf_stub(elf_path: Path, squashfs_path: Path, update_info: str | None = None) -> None:
     """Build minimal ELF stub with AppImage magic and section headers."""
-    squashfs_size = squashfs_path.stat().st_size
+    _ = squashfs_path.stat().st_size
 
     # ELF64 header (64 bytes)
     # Offset 0: e_ident (16 bytes)

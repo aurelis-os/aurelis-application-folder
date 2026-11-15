@@ -16,28 +16,23 @@ from appimage_launcher.constants import (
     ELF_MAGIC,
     SQUASHFS_MAGIC,
 )
+from appimage_launcher.core.exceptions import (
+    InvalidAppImageError as CorruptAppImageError,
+)
+
+# Re-export core exceptions for backward compatibility
+# These are now the canonical exceptions used throughout the codebase
+from appimage_launcher.core.exceptions import (
+    InvalidAppImageError as NotAnAppImageError,
+)
+from appimage_launcher.core.exceptions import (
+    UnsupportedTypeError,
+)
 
 
+# Keep ELFError for backward compatibility
 class ELFError(Exception):
-    """Base exception for ELF parsing errors."""
-
-    pass
-
-
-class NotAnAppImageError(ELFError):
-    """File is not an AppImage (missing ELF or AppImage magic)."""
-
-    pass
-
-
-class UnsupportedTypeError(ELFError):
-    """AppImage type 1 (ISO9660) - not supported."""
-
-    pass
-
-
-class CorruptAppImageError(ELFError):
-    """AppImage appears corrupt (bad squashfs magic, etc.)."""
+    """Base exception for ELF parsing errors (deprecated, use core exceptions)."""
 
     pass
 
