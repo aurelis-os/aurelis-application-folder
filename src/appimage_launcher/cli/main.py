@@ -351,7 +351,7 @@ Examples:
     return parser
 
 
-def get_manager(args: argparse.Namespace) -> Manager:
+def get_manager(args: argparse.Namespace) -> Manager | DBusClientManager:
     """Get Manager instance, using daemon or direct mode."""
     if args.no_daemon:
         logger.debug("Direct mode forced by --no-daemon")
@@ -362,6 +362,7 @@ def get_manager(args: argparse.Namespace) -> Manager:
         return DBusClientManager()
     except Exception as e:
         logger.debug("Daemon not available, falling back to direct mode", error=str(e))
+        print_warning("daemon not running; using direct mode")
         return Manager()
 
 
@@ -383,7 +384,9 @@ class DBusClientManager:
         self._connect()
 
     def _connect(self) -> None:
-        """Connect to the D-Bus daemon."""
+        """Connect to the D-Bus daemon with a 5 second timeout."""
+        import asyncio
+
         from appimage_launcher.constants import (
             DBUS_INTERFACE_NAME,
             DBUS_OBJECT_PATH,
@@ -398,13 +401,58 @@ class DBusClientManager:
             )
             self._interface = self._proxy.get_interface(DBUS_INTERFACE_NAME)
 
-        self._loop.run_until_complete(_do_connect())
+        try:
+            self._loop.run_until_complete(asyncio.wait_for(_do_connect(), timeout=5.0))
+        except TimeoutError as e:
+            raise CLIError("Daemon not available (connection timeout)") from e
+        except Exception as e:
+            raise CLIError(f"Daemon not available: {e}") from e
+
+    @staticmethod
+    def _pascal_to_snake_call(method_name: str) -> str:
+        """Convert PascalCase method name to dbus-fast's call_<snake_case> format.
+
+        Examples:
+            Install -> call_install
+            CheckUpdates -> call_check_updates
+            SetOrigin -> call_set_origin
+        """
+        import re
+
+        snake = re.sub(r"([A-Z])", r"_\1", method_name).lower().lstrip("_")
+        return f"call_{snake}"
+
+    @staticmethod
+    def _wrap_variants(d: dict) -> dict:
+        """Wrap values in D-Bus Variants for a{sv} dictionary."""
+        from dbus_fast import Variant
+
+        result = {}
+        for k, v in d.items():
+            if isinstance(v, bool):
+                result[k] = Variant("b", v)
+            elif isinstance(v, int):
+                result[k] = Variant("i", v)
+            elif isinstance(v, str):
+                result[k] = Variant("s", v)
+            else:
+                result[k] = v
+        return result
 
     def _call(self, method_name: str, *args) -> Any:
-        """Call a D-Bus method synchronously."""
-        method = getattr(self._interface, method_name)
+        """Call a D-Bus method synchronously.
+
+        The dbus-fast proxy exposes methods as call_<snake_case> (e.g., call_install,
+        call_check_updates, call_set_origin). This method converts the PascalCase
+        D-Bus method name to the correct proxy method name.
+        """
+        proxy_method_name = self._pascal_to_snake_call(method_name)
+        method = getattr(self._interface, proxy_method_name)
         future = method(*args)
-        return self._loop.run_until_complete(future)
+        try:
+            return self._loop.run_until_complete(future)
+        except Exception as e:
+            raise CLIError(f"Daemon call {method_name} failed: {e}", EXIT_DAEMON_REQUIRED) from e
 
     # Delegate methods to D-Bus
 
@@ -434,7 +482,7 @@ class DBusClientManager:
         if origin:
             options["origin"] = origin
 
-        result_json = self._call("Install", str(source_path), options)
+        result_json = self._call("Install", str(source_path), self._wrap_variants(options))
         result = json.loads(result_json)
 
         if result.get("error") == "conflict" or "ConflictPending" in str(result):
@@ -485,7 +533,7 @@ class DBusClientManager:
             "confirm": purge,
             "silent": False,
         }
-        self._call("Remove", name, options)
+        self._call("Remove", name, self._wrap_variants(options))
 
     def rename(self, name, new_name, reset=False):
         if reset:
@@ -559,29 +607,47 @@ class DBusClientManager:
             updated_at=app_data["updated_at"],
         )
 
+    def check_updates(self, name):
+        from appimage_launcher.core.updates import UpdateCheckResult
+
+        result_json = self._call("CheckUpdates", [name])
+        import json
+
+        results = json.loads(result_json)
+        if not results:
+            return UpdateCheckResult(
+                has_update=False,
+                current_version=None,
+                latest_version=None,
+                update_info=None,
+                error="not_found",
+            )
+        result = results[0]
+        return UpdateCheckResult(
+            has_update=result.get("has_update", False),
+            current_version=result.get("current_version"),
+            latest_version=result.get("latest_version"),
+            update_info=None,  # Would need to reconstruct
+            error=result.get("skip_reason"),
+        )
+
     def revert(self, name):
         self._call("Revert", name)
         return self._find_app_by_name(name)
 
-    def disable(self, name):
-        self._call("Disable", name)
-        return self._find_app_by_name(name)
-
-    def enable(self, name):
-        self._call("Enable", name)
-        return self._find_app_by_name(name)
-
-    def export_data(self):
-        result_json = self._call("Export")
+    def apply_update(self, name, staging_dir=None):
         import json
 
-        return json.loads(result_json)
+        from appimage_launcher.core.updates import UpdateApplyResult
 
-    def import_data(self, data):
-        import json
-
-        self._call("Import", json.dumps(data))
-        return 0
+        result_json = self._call("Update", name)
+        result = json.loads(result_json)
+        return UpdateApplyResult(
+            success=result.get("success", False),
+            output_path=Path(result["output_path"]) if result.get("output_path") else None,
+            error=result.get("error"),
+            signature_verified=result.get("signature_verified", False),
+        )
 
     def dedupe(self, dirs=None):
         # Not available via D-Bus yet
@@ -595,6 +661,18 @@ class DBusClientManager:
             "removed_entries": 0,
             "removed_icons": 0,
         }
+
+    def disable(self, name):
+        raise NotImplementedError("disable is not available via D-Bus daemon")
+
+    def enable(self, name):
+        raise NotImplementedError("enable is not available via D-Bus daemon")
+
+    def export_data(self):
+        raise NotImplementedError("export is not available via D-Bus daemon")
+
+    def import_data(self, data):
+        raise NotImplementedError("import is not available via D-Bus daemon")
 
     def _find_app_by_name(self, name):
         """Find app by name via D-Bus."""
@@ -642,7 +720,7 @@ class DBusDBProxy:
 
     def list_apps(self, include_kept=False, compute_hash=False):
         options = {"all": include_kept, "hash": compute_hash}
-        result_json = self._client._call("List", options)
+        result_json = self._client._call("List", self._client._wrap_variants(options))
         import json
 
         apps_data = json.loads(result_json)
@@ -694,7 +772,7 @@ def load_origin(origin_arg: str | None) -> str | None:
     return origin_arg
 
 
-def cmd_install(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_install(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle install command."""
     for file_path in args.files:
         if not file_path.exists():
@@ -762,7 +840,7 @@ def cmd_install(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_remove(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_remove(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle remove command."""
     for name in args.names:
         try:
@@ -785,7 +863,7 @@ def cmd_remove(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_rename(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_rename(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle rename command."""
     try:
         app = manager.rename(args.name, args.new_name or "", reset=args.reset)
@@ -806,7 +884,7 @@ def cmd_rename(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_list(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_list(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle list command."""
     apps = manager.db.list_apps(include_kept=args.all, compute_hash=args.hash)
 
@@ -867,7 +945,7 @@ def cmd_list(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_info(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_info(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle info command."""
     # Check if it's a file path
     path = Path(args.name)
@@ -948,7 +1026,7 @@ def cmd_info(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_update(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_update(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle update command."""
     get_config()
 
@@ -964,39 +1042,39 @@ def cmd_update(args: argparse.Namespace, manager: Manager) -> int:
         # Check for updates
         any_updates = False
         for name in names:
-            result = manager.check_updates(name)
+            check_result = manager.check_updates(name)
 
             if args.json:
                 print_json(
                     {
-                        "app_id": result.update_info.args[0]
-                        if result.update_info and result.update_info.args
+                        "app_id": check_result.update_info.args[0]
+                        if check_result.update_info and check_result.update_info.args
                         else "",
-                        "has_update": result.has_update,
-                        "current_version": result.current_version,
-                        "latest_version": result.latest_version,
-                        "skipped": result.error is not None,
-                        "skip_reason": result.error,
+                        "has_update": check_result.has_update,
+                        "current_version": check_result.current_version,
+                        "latest_version": check_result.latest_version,
+                        "skipped": check_result.error is not None,
+                        "skip_reason": check_result.error,
                     }
                 )
             else:
-                if result.error:
-                    if result.error == "catalog_linked":
+                if check_result.error:
+                    if check_result.error == "catalog_linked":
                         print_info(
                             f"Skipping {name}: catalog-linked (updates managed by front-end)"
                         )
-                    elif result.error == "not_found":
+                    elif check_result.error == "not_found":
                         print_error(f"App not found: {name}")
                     else:
-                        print_info(f"No updates for {name}: {result.error}")
-                elif result.has_update:
+                        print_info(f"No updates for {name}: {check_result.error}")
+                elif check_result.has_update:
                     any_updates = True
                     print_info(
-                        f"Update available for {name}: {result.current_version} -> {result.latest_version or 'unknown'}"
+                        f"Update available for {name}: {check_result.current_version} -> {check_result.latest_version or 'unknown'}"
                     )
                 else:
                     print_info(
-                        f"No updates available for {name} ({result.current_version or 'unknown'})"
+                        f"No updates available for {name} ({check_result.current_version or 'unknown'})"
                     )
 
         # Exit with code 10 if updates available (for --check)
@@ -1005,28 +1083,30 @@ def cmd_update(args: argparse.Namespace, manager: Manager) -> int:
     else:
         # Apply updates
         for name in names:
-            result = manager.apply_update(name)
+            apply_result = manager.apply_update(name)
 
             if args.json:
                 print_json(
                     {
-                        "success": result.success,
-                        "output_path": str(result.output_path) if result.output_path else None,
-                        "error": result.error,
-                        "signature_verified": result.signature_verified,
+                        "success": apply_result.success,
+                        "output_path": str(apply_result.output_path)
+                        if apply_result.output_path
+                        else None,
+                        "error": apply_result.error,
+                        "signature_verified": apply_result.signature_verified,
                     }
                 )
             else:
-                if result.success:
+                if apply_result.success:
                     print_info(f"Successfully updated {name}")
                 else:
-                    print_error(f"Failed to update {name}: {result.error}")
+                    print_error(f"Failed to update {name}: {apply_result.error}")
                     return EXIT_ERROR
 
     return EXIT_OK
 
 
-def cmd_policy(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_policy(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle policy command."""
     try:
         app = manager.set_policy(args.name, args.policy)
@@ -1039,7 +1119,7 @@ def cmd_policy(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_origin(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_origin(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle origin command."""
     origin = load_origin(args.origin_set) if args.origin_set else None
 
@@ -1059,7 +1139,7 @@ def cmd_origin(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_revert(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_revert(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle revert command."""
     try:
         app = manager.revert(args.name)
@@ -1072,7 +1152,7 @@ def cmd_revert(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_versions(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_versions(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle versions command."""
     app = manager._find_app_by_name(args.name)
     if not app:
@@ -1103,8 +1183,12 @@ def cmd_versions(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_disable(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_disable(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle disable command."""
+    if isinstance(manager, DBusClientManager):
+        raise CLIError(
+            "disable is not available via D-Bus daemon; use --no-daemon", EXIT_DAEMON_REQUIRED
+        )
     try:
         app = manager.disable(args.name)
     except ValueError as e:
@@ -1116,8 +1200,12 @@ def cmd_disable(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_enable(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_enable(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle enable command."""
+    if isinstance(manager, DBusClientManager):
+        raise CLIError(
+            "enable is not available via D-Bus daemon; use --no-daemon", EXIT_DAEMON_REQUIRED
+        )
     try:
         app = manager.enable(args.name)
     except ValueError as e:
@@ -1129,7 +1217,7 @@ def cmd_enable(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_run(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_run(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle run command."""
     app = manager._find_app_by_name(args.name)
     if not app:
@@ -1150,35 +1238,35 @@ def cmd_run(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_browse(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_browse(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle browse command."""
     # TODO: Implement browse with squashfuse
     print_warning("Browse not yet implemented")
     return EXIT_OK
 
 
-def cmd_extract(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_extract(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle extract command."""
     # TODO: Implement extract
     print_warning("Extract not yet implemented")
     return EXIT_OK
 
 
-def cmd_verify(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_verify(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle verify command."""
     # TODO: Implement verify
     print_warning("Verify not yet implemented")
     return EXIT_OK
 
 
-def cmd_reindex(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_reindex(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle reindex command."""
     # TODO: Implement reindex
     print_warning("Reindex not yet implemented")
     return EXIT_OK
 
 
-def cmd_doctor(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_doctor(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle doctor command."""
     print_info("AppImage Launcher Diagnostics")
     print_info("=" * 40)
@@ -1317,7 +1405,7 @@ def cmd_doctor(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_config(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_config(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle config command."""
     config = get_config()
 
@@ -1338,14 +1426,14 @@ def cmd_config(args: argparse.Namespace, manager: Manager) -> int:
 
     elif args.config_command == "list":
         # Print all config
-        import toml  # type: ignore[import-untyped]
+        import tomli_w
 
-        print_info(toml.dumps(config.__dict__))
+        print_info(tomli_w.dumps(config.to_dict()))
 
     return EXIT_OK
 
 
-def cmd_completions(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_completions(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle completions command."""
     # Read completion script from packaging
     completion_files = {
@@ -1363,14 +1451,18 @@ def cmd_completions(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_status(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_status(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle status command."""
     print_info("Daemon status: not implemented")
     return EXIT_OK
 
 
-def cmd_export(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_export(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle export command."""
+    if isinstance(manager, DBusClientManager):
+        raise CLIError(
+            "export is not available via D-Bus daemon; use --no-daemon", EXIT_DAEMON_REQUIRED
+        )
     data = manager.export_data()
 
     if args.file:
@@ -1381,8 +1473,12 @@ def cmd_export(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_import(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_import(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle import command."""
+    if isinstance(manager, DBusClientManager):
+        raise CLIError(
+            "import is not available via D-Bus daemon; use --no-daemon", EXIT_DAEMON_REQUIRED
+        )
     import json
 
     data = json.loads(args.file.read_text())
@@ -1392,7 +1488,7 @@ def cmd_import(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_dedupe(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_dedupe(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle dedupe command."""
     dirs = args.dirs if args.dirs else None
     result = manager.dedupe(dirs)
@@ -1412,7 +1508,7 @@ def cmd_dedupe(args: argparse.Namespace, manager: Manager) -> int:
     return EXIT_OK
 
 
-def cmd_cleanup(args: argparse.Namespace, manager: Manager) -> int:
+def cmd_cleanup(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
     """Handle cleanup command."""
     result = manager.cleanup(args.days)
 

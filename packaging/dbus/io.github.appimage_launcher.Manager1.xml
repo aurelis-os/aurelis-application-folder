@@ -38,6 +38,7 @@
     </method>
     <method name="Update">
       <arg name="name" type="s" direction="in"/>
+      <arg name="result" type="s" direction="out"/>
     </method>
     <method name="Revert">
       <arg name="name" type="s" direction="in"/>

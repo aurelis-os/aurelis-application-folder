@@ -519,6 +519,135 @@ class TestStateDB:
         assert "App1" in apps_dict
         assert "App2" in apps_dict
 
+    def test_delete_backup(self):
+        """Test deleting a specific backup by ID."""
+        now = int(time.time())
+        for i in range(3):
+            backup = BackupRecord(
+                id=0,
+                app_id="com.example.test",
+                path=f"/home/user/Applications/.previous/TestApp.old{i}",
+                version=f"1.0.{i}",
+                size=1000000,
+                created_at=now + i,
+            )
+            self.db.insert_backup(backup)
+
+        backups = self.db.get_backups("com.example.test")
+        assert len(backups) == 3
+
+        # Delete the middle backup (version 1.0.1)
+        middle_backup_id = backups[1].id
+        self.db.delete_backup(middle_backup_id)
+
+        backups = self.db.get_backups("com.example.test")
+        assert len(backups) == 2
+        assert backups[0].version == "1.0.2"
+        assert backups[1].version == "1.0.0"
+
+    def test_list_tombstones(self):
+        """Test listing all tombstones."""
+        now = int(time.time())
+        for i in range(3):
+            tombstone = TombstoneRecord(
+                id=0,
+                app_id=f"com.example.app{i}",
+                device=123,
+                inode=456 + i,
+                fingerprint=f"fp{i}",
+                last_name=f"App{i}",
+                name_origin="auto",
+                update_policy="auto",
+                self_managed=False,
+                origin=None,
+                removed_at=now + i,
+            )
+            self.db.insert_tombstone(tombstone)
+
+        tombstones = self.db.list_tombstones()
+        assert len(tombstones) == 3
+        # Should be ordered by removed_at DESC (newest first)
+        assert tombstones[0].app_id == "com.example.app2"
+        assert tombstones[1].app_id == "com.example.app1"
+        assert tombstones[2].app_id == "com.example.app0"
+
+    def test_prune_previous_removes_oldest_files(self):
+        """Test Manager._prune_previous keeps 2 DB records AND 2 real files, removes oldest."""
+        import tempfile
+        from pathlib import Path
+
+        from appimage_launcher.config import Config
+        from appimage_launcher.core.manager import Manager
+        from appimage_launcher.core.state import BackupRecord, StateDB
+        from appimage_launcher.paths import Paths
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            applications_dir = tmpdir_path / "Applications"
+            applications_dir.mkdir()
+            previous_dir = applications_dir / ".previous"
+            previous_dir.mkdir()
+
+            # Create test config with previous_versions_keep=2
+            test_config = Config()
+            test_config.applications_dir = str(applications_dir)
+            test_config.update.previous_versions_keep = 2
+
+            test_paths = Paths.from_config(test_config)
+            test_paths.ensure_dirs()
+
+            state_dir = tmpdir_path / "state"
+            state_dir.mkdir()
+            db_path = state_dir / "state.db"
+            db = StateDB(db_path)
+
+            manager = Manager(db=db)
+            manager.config = test_config
+            manager.paths = test_paths
+
+            # Create 4 REAL backup files with increasing timestamps
+            now = int(time.time())
+            backup_files = []
+            for i in range(4):
+                backup_file = previous_dir / f"TestApp.old{i}"
+                backup_file.write_bytes(b"x" * (1000000 + i * 100))  # Different sizes
+                backup_files.append(backup_file)
+
+            # Insert 4 backup records in DB with increasing created_at (oldest first)
+            for i in range(4):
+                backup = BackupRecord(
+                    id=0,
+                    app_id="com.example.test",
+                    path=str(backup_files[i]),
+                    version=f"1.0.{i}",
+                    size=1000000 + i * 100,
+                    created_at=now + i,
+                )
+                db.insert_backup(backup)
+
+            backups = db.get_backups("com.example.test")
+            assert len(backups) == 4
+
+            # Call Manager._prune_previous
+            manager._prune_previous("com.example.test")
+
+            # Assert 2 DB records remain
+            backups = db.get_backups("com.example.test")
+            assert len(backups) == 2
+            # Should keep the newest 2 (highest created_at = versions 1.0.3 and 1.0.2)
+            assert backups[0].version == "1.0.3"
+            assert backups[1].version == "1.0.2"
+
+            # Assert 2 REAL files remain
+            remaining_files = list(previous_dir.iterdir())
+            assert len(remaining_files) == 2
+            remaining_names = {f.name for f in remaining_files}
+            assert remaining_names == {"TestApp.old3", "TestApp.old2"}
+
+            # Assert the removed files are the oldest (versions 1.0.0 and 1.0.1)
+            assert not (previous_dir / "TestApp.old0").exists()
+            assert not (previous_dir / "TestApp.old1").exists()
+
 
 class TestGlobalStateDB:
     """Tests for global StateDB functions."""

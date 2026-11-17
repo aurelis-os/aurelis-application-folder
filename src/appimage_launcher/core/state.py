@@ -268,7 +268,10 @@ class StateDB:
                     app.updated_at,
                 ),
             )
-            return cursor.lastrowid
+            rowid = cursor.lastrowid
+            if rowid is None:
+                raise RuntimeError("Failed to insert app: no rowid returned")
+            return rowid
 
     def update_app(self, app: AppRecord) -> None:
         """Update an existing app record."""
@@ -351,7 +354,7 @@ class StateDB:
             ).fetchall()
             return [self._row_to_app(row) for row in rows]
 
-    def list_apps(self, include_kept: bool = False) -> list[AppRecord]:
+    def list_apps(self, include_kept: bool = False, compute_hash: bool = False) -> list[AppRecord]:
         """List all apps."""
         with self._get_conn() as conn:
             if include_kept:
@@ -360,7 +363,19 @@ class StateDB:
                 rows = conn.execute(
                     "SELECT * FROM apps WHERE role = 'primary' ORDER BY display_name"
                 ).fetchall()
-            return [self._row_to_app(row) for row in rows]
+            apps = [self._row_to_app(row) for row in rows]
+
+            if compute_hash:
+                from appimage_launcher.core.identity import compute_full_sha256
+
+                for app in apps:
+                    if not app.sha256:
+                        path = Path(app.path)
+                        if path.exists():
+                            app.sha256 = compute_full_sha256(path)
+                            self.update_app(app)
+
+            return apps
 
     def get_app_by_sha256(self, sha256: str) -> AppRecord | None:
         """Get app by SHA-256 hash."""
@@ -402,7 +417,10 @@ class StateDB:
                     tombstone.removed_at,
                 ),
             )
-            return cursor.lastrowid
+            rowid = cursor.lastrowid
+            if rowid is None:
+                raise RuntimeError("Failed to insert tombstone: no rowid returned")
+            return rowid
 
     def find_tombstone_by_inode(self, device: int, inode: int) -> TombstoneRecord | None:
         """Find tombstone by device and inode."""
@@ -421,6 +439,12 @@ class StateDB:
                 (fingerprint,),
             ).fetchone()
             return self._row_to_tombstone(row) if row else None
+
+    def list_tombstones(self) -> list[TombstoneRecord]:
+        """List all tombstones."""
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT * FROM tombstones ORDER BY removed_at DESC").fetchall()
+            return [self._row_to_tombstone(row) for row in rows]
 
     def delete_tombstone(self, tombstone_id: int) -> None:
         """Delete a tombstone by ID."""
@@ -449,7 +473,10 @@ class StateDB:
                 """,
                 (backup.app_id, backup.path, backup.version, backup.size, backup.created_at),
             )
-            return cursor.lastrowid
+            rowid = cursor.lastrowid
+            if rowid is None:
+                raise RuntimeError("Failed to insert backup: no rowid returned")
+            return rowid
 
     def get_backups(self, app_id: str) -> list[BackupRecord]:
         """Get backups for an app_id."""
@@ -473,6 +500,11 @@ class StateDB:
             )
             return cursor.rowcount
 
+    def delete_backup(self, backup_id: int) -> None:
+        """Delete a specific backup by ID."""
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM backups WHERE id = ?", (backup_id,))
+
     # Event operations
 
     def insert_event(self, kind: str, app_id: str | None = None, detail: str | None = None) -> int:
@@ -482,7 +514,10 @@ class StateDB:
                 "INSERT INTO events (ts, kind, app_id, detail) VALUES (?, ?, ?, ?)",
                 (int(time.time()), kind, app_id, detail),
             )
-            return cursor.lastrowid
+            rowid = cursor.lastrowid
+            if rowid is None:
+                raise RuntimeError("Failed to insert event: no rowid returned")
+            return rowid
 
     def get_events(self, limit: int = 100) -> list[EventRecord]:
         """Get recent events."""

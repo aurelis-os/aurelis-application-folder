@@ -84,7 +84,7 @@ disallow_incomplete_defs = false
 check_untyped_defs = false
 no_implicit_optional = false
 strict = false
-exclude = ["src/appimage_launcher/core/", "src/appimage_launcher/gui/", "src/appimage_launcher/daemon/", "src/appimage_launcher/cli/"]
+exclude = ["src/appimage_launcher/gui", "src/appimage_launcher/daemon"]
 
 [[tool.mypy.overrides]]
 module = "appimage_launcher.*"
@@ -93,6 +93,16 @@ strict = false
 [[tool.mypy.overrides]]
 module = "inotify_simple"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "PyQt6"
+ignore_missing_imports = true
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "PyQt6.*"
+ignore_missing_imports = true
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

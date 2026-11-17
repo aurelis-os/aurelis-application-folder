@@ -50,6 +50,18 @@ class ExpectedEvent:
     expires_at: float
 
 
+@dataclass
+class StabilityTracker:
+    """Tracks stability state for a file."""
+
+    size: int
+    mtime_ns: int
+    first_seen: float
+    inode: int = 0
+    device: int = 0
+    recheck_task: asyncio.TimerHandle | None = None
+
+
 class InotifyObserver:
     """Watches the Applications directory for file system events."""
 
@@ -77,6 +89,10 @@ class InotifyObserver:
 
         # Rename tracking (MOVED_FROM + MOVED_TO with same cookie)
         self._rename_from: dict[int, FSEntry] = {}
+
+        # Stability tracking: track (size, mtime_ns) and schedule re-check
+        self._file_stats: dict[str, StabilityTracker] = {}
+        self._stability_window = 2.0  # seconds
 
     def start(self) -> None:
         """Start watching the directory."""
@@ -108,6 +124,11 @@ class InotifyObserver:
         for task in self._debounce_tasks.values():
             task.cancel()
         self._debounce_tasks.clear()
+
+        # Cancel stability recheck tasks
+        for tracker in self._file_stats.values():
+            if tracker.recheck_task:
+                tracker.recheck_task.cancel()
 
         if self._task:
             self._task.cancel()
@@ -202,23 +223,68 @@ class InotifyObserver:
 
         path = self.watch_path / name
 
-        # Get file stats for inode/device
+        # Determine event type from mask first (before stat)
+        event_type = self._event_type_from_flags(event.mask)
+
+        # Handle MOVED_FROM early - file no longer exists at old path
+        if event_type == "MOVED_FROM":
+            self._handle_moved_from(event, path, event.cookie)
+            return
+
+        # Handle rename pairing: MOVED_TO with matching MOVED_FROM cookie
+        # Check the raw mask for MOVED_TO flag since event_type might be CLOSE_WRITE if both flags are set
+        if (event.mask & flags.MOVED_TO) and event.cookie in self._rename_from:
+            from_entry = self._rename_from.pop(event.cookie)
+            # This is a rename within the directory - queue both immediately (no stability needed)
+            self._queue_event(from_entry)
+            # Get inode/device for new path
+            try:
+                stat = path.stat()
+                inode = stat.st_ino
+                device = stat.st_dev
+            except Exception:
+                inode = 0
+                device = 0
+            # Create entry for MOVED_TO
+            to_entry = FSEntry(
+                path=path,
+                inode=inode,
+                device=device,
+                event_type="MOVED_TO",
+                timestamp=time.time(),
+                cookie=event.cookie,
+            )
+            self._queue_event(to_entry)
+            return
+
+        # Get file stats for inode/device (for other event types)
         try:
             stat = path.stat()
             inode = stat.st_ino
             device = stat.st_dev
+            size = stat.st_size
+            mtime_ns = stat.st_mtime_ns
         except FileNotFoundError:
-            # File was deleted, use placeholder values
-            inode = 0
-            device = 0
+            # File was deleted, handle delete event
+            self._handle_delete_event(event, path, event.cookie)
+            return
         except Exception as e:
             logger.warning("Failed to stat file", path=str(path), error=str(e))
             return
 
-        # Determine event type
-        event_type = self._event_type_from_flags(event.mask)
+        # Handle events that should trigger stability check
+        if event_type in ("CLOSE_WRITE", "MOVED_TO"):
+            self._schedule_stability_check(event, path, inode, device, size, mtime_ns, event.cookie)
+            return
 
-        # Create FSEntry
+        # For DELETE, process immediately (no stability needed)
+        if event_type == "DELETE":
+            self._handle_delete_event(event, path, event.cookie)
+            return
+
+        # For ATTRIB and other events, queue for debounce
+
+        # Unknown event type, queue for debounce
         entry = FSEntry(
             path=path,
             inode=inode,
@@ -227,40 +293,194 @@ class InotifyObserver:
             timestamp=time.time(),
             cookie=event.cookie,
         )
-
-        # Check if this is an expected event (from our own operations)
-        if self._is_expected(entry):
-            logger.debug("Suppressed expected event", path=str(path), type=event_type)
-            return
-
-        # Handle rename tracking (MOVED_FROM + MOVED_TO with same cookie)
-        if event_type == "MOVED_FROM":
-            self._rename_from[event.cookie] = entry
-            return
-
-        if event_type == "MOVED_TO":
-            # Check for matching MOVED_FROM
-            if event.cookie in self._rename_from:
-                from_entry = self._rename_from.pop(event.cookie)
-                # This is a rename within the directory
-                self._queue_event(from_entry)
-                self._queue_event(entry)
-                return
-
-        # Queue the event for debouncing
         self._queue_event(entry)
+
+    def _schedule_stability_check(
+        self,
+        event,
+        path: Path,
+        inode: int,
+        device: int,
+        size: int,
+        mtime_ns: int,
+        cookie: int,
+    ) -> None:
+        """Schedule or reschedule a stability check for a file."""
+        key = str(path)
+        now = time.time()
+
+        if key in self._file_stats:
+            tracker = self._file_stats[key]
+            if tracker.size != size or tracker.mtime_ns != mtime_ns:
+                # File changed, update stats and reschedule
+                tracker.size = size
+                tracker.mtime_ns = mtime_ns
+                tracker.first_seen = now
+                if tracker.recheck_task:
+                    tracker.recheck_task.cancel()
+                tracker.recheck_task = self.loop.call_later(
+                    self._stability_window + 0.1, self._recheck_stability, path
+                )
+                logger.debug("File changed, rescheduled stability check", path=str(path))
+            # else: same stat, existing recheck will handle it
+        else:
+            # First time seeing this file, schedule check
+            tracker = StabilityTracker(
+                size=size,
+                mtime_ns=mtime_ns,
+                first_seen=now,
+                inode=inode,
+                device=device,
+            )
+            tracker.recheck_task = self.loop.call_later(
+                self._stability_window + 0.1, self._recheck_stability, path
+            )
+            self._file_stats[key] = tracker
+            logger.debug("First sighting of file, scheduled stability check", path=str(path))
+
+    def _recheck_stability(self, path: Path) -> None:
+        """Recheck file stability after the window has passed."""
+        key = str(path)
+        if key not in self._file_stats:
+            return  # Already processed or deleted
+
+        tracker = self._file_stats[key]
+        tracker.recheck_task = None
+
+        try:
+            stat = path.stat()
+            current_size = stat.st_size
+            current_mtime_ns = stat.st_mtime_ns
+        except FileNotFoundError:
+            # File was deleted, clean up
+            self._file_stats.pop(key, None)
+            logger.debug("File deleted before stability check completed", path=str(path))
+            return
+        except Exception as e:
+            logger.warning("Failed to stat file during recheck", path=str(path), error=str(e))
+            # Reschedule once more
+            tracker.recheck_task = self.loop.call_later(
+                self._stability_window + 0.1, self._recheck_stability, path
+            )
+            return
+
+        now = time.time()
+        if tracker.size == current_size and tracker.mtime_ns == current_mtime_ns:
+            # File is stable and window has passed
+            if now - tracker.first_seen >= self._stability_window:
+                self._file_stats.pop(key, None)
+                # Find the original event type from the event that triggered this
+                # We need to process a synthetic event - but we don't have the original event
+                # Instead, create an FSEntry with CLOSE_WRITE as the event type
+                entry = FSEntry(
+                    path=path,
+                    inode=stat.st_ino,
+                    device=stat.st_dev,
+                    event_type="CLOSE_WRITE",
+                    timestamp=now,
+                    cookie=0,
+                )
+                self._process_stable_entry(entry)
+            else:
+                # Window not yet passed, reschedule
+                tracker.recheck_task = self.loop.call_later(
+                    self._stability_window + 0.1 - (now - tracker.first_seen),
+                    self._recheck_stability,
+                    path,
+                )
+        else:
+            # File changed during wait, reschedule
+            tracker.size = current_size
+            tracker.mtime_ns = current_mtime_ns
+            tracker.first_seen = now
+            tracker.recheck_task = self.loop.call_later(
+                self._stability_window + 0.1, self._recheck_stability, path
+            )
+            logger.debug("File changed during stability wait, rescheduled", path=str(path))
+
+    def _handle_delete_event(self, event, path: Path, cookie: int) -> None:
+        """Handle DELETE event - remove from stability tracking and process."""
+        key = str(path)
+        # Check if this file was being tracked for stability
+        tracker = self._file_stats.pop(key, None)
+        if tracker and tracker.recheck_task:
+            tracker.recheck_task.cancel()
+
+        # If we were tracking this file for stability, it was a file being written
+        # that got deleted before stabilizing - don't emit DELETE event
+        if tracker:
+            logger.debug("Deleted file was pending stability, ignoring", path=str(path))
+            return
+
+        # Otherwise, it's a real DELETE event for an already-stable file
+        entry = FSEntry(
+            path=path,
+            inode=0,
+            device=0,
+            event_type="DELETE",
+            timestamp=time.time(),
+            cookie=cookie,
+        )
+        self._queue_event(entry)
+
+    def _handle_moved_from(self, event, path: Path, cookie: int) -> None:
+        """Handle MOVED_FROM event - track for rename pairing."""
+        key = str(path)
+        # Remove from stability tracking and get inode/device from tracker
+        tracker = self._file_stats.pop(key, None)
+        if tracker:
+            inode = tracker.inode
+            device = tracker.device
+        else:
+            inode = 0
+            device = 0
+        if tracker and tracker.recheck_task:
+            tracker.recheck_task.cancel()
+
+        entry = FSEntry(
+            path=path,
+            inode=inode,
+            device=device,
+            event_type="MOVED_FROM",
+            timestamp=time.time(),
+            cookie=cookie,
+        )
+        self._rename_from[cookie] = entry
+
+    def _process_stable_entry(self, entry: FSEntry) -> None:
+        """Process an entry for a file that has passed the stability check."""
+        if self._is_expected(entry):
+            logger.debug("Suppressed expected event", path=str(entry.path), type=entry.event_type)
+            return
+
+        key = str(entry.path)
+        self._pending_events[key].append(entry)
+
+        # Cancel any existing debounce task for this key
+        if key in self._debounce_tasks:
+            self._debounce_tasks[key].cancel()
+            self._debounce_tasks.pop(key, None)
+
+        # Coalesce and process immediately
+        events = self._pending_events.pop(key, [])
+        coalesced = self._coalesce_events(events)
+
+        try:
+            self.callback(coalesced)
+        except Exception as e:
+            logger.error("Callback error", error=str(e))
 
     def _event_type_from_flags(self, mask: int) -> str:
         """Convert inotify mask to event type string."""
-        if mask & flags.IN_CLOSE_WRITE:
+        if mask & flags.CLOSE_WRITE:
             return "CLOSE_WRITE"
-        elif mask & flags.IN_MOVED_FROM:
+        elif mask & flags.MOVED_FROM:
             return "MOVED_FROM"
-        elif mask & flags.IN_MOVED_TO:
+        elif mask & flags.MOVED_TO:
             return "MOVED_TO"
-        elif mask & flags.IN_DELETE:
+        elif mask & flags.DELETE:
             return "DELETE"
-        elif mask & flags.IN_ATTRIB:
+        elif mask & flags.ATTRIB:
             return "ATTRIB"
         return "UNKNOWN"
 
@@ -608,9 +828,6 @@ class Classifier:
             # This is an external replacement (not self-update)
             # Treat as a conflict with replace policy
             try:
-                # We need to call install with is_self_update=False (default)
-                # But we can't easily pass that through the current API
-                # For now, use the existing path which will call _handle_conflict with is_self_update=False
                 result = self.manager.install(
                     entry.path,
                     source_action="copy",
@@ -623,11 +840,7 @@ class Classifier:
 
     def _process_self_update_direct(self, old_app, new_path: Path, meta) -> None:
         """Process self-update directly (fallback when no daemon callback)."""
-        # This is a simplified version - the daemon's _process_self_update is more complete
-        # For now, just do the replace with self_managed flag
         try:
-            # We need to call the internal replace method directly with is_self_update=True
-            # Since we can't easily do that through the public API, we'll use a workaround
             result = self.manager._replace_app(
                 old_app,
                 meta,
@@ -672,6 +885,7 @@ class Classifier:
             name_origin=app.name_origin,
             update_policy=app.update_policy,
             self_managed=app.self_managed,
+            origin=app.origin,
             removed_at=int(time.time()),
         )
         self.manager.db.insert_tombstone(tombstone)

@@ -55,6 +55,7 @@ IGNORED_PATTERNS = [
     "*.crdownload",  # Chrome downloads
     "*.partial",  # partial downloads
     "*.tmp",  # temporary files
+    "*.download",  # Firefox downloads
     "*~",  # backup files
     "*.zs-old",  # zsync old files
     "*.disabled",  # disabled apps

@@ -7,6 +7,11 @@ to dbus_fast.errors.DBusError with the correct error type.
 
 from __future__ import annotations
 
+from typing import Any
+
+from appimage_launcher.core.state import AppRecord
+from appimage_launcher.core.versions import VersionRelation
+
 
 class AppImageLauncherError(Exception):
     """Base exception for all AppImage Launcher errors."""
@@ -40,9 +45,21 @@ class ConflictPendingError(AppImageLauncherError):
 
     DBUS_ERROR_NAME = "ConflictPending"
 
-    def __init__(self, conflict_id: str, message: str = "Conflict requires decision"):
+    def __init__(
+        self,
+        conflict_id: str,
+        old_app: AppRecord,
+        new_meta: Any,
+        relation: VersionRelation,
+        is_self_update: bool,
+        message: str = "Conflict requires decision",
+    ):
         super().__init__(message)
         self.conflict_id = conflict_id
+        self.old_app = old_app
+        self.new_meta = new_meta
+        self.relation = relation
+        self.is_self_update = is_self_update
 
 
 class NameCollisionError(AppImageLauncherError):

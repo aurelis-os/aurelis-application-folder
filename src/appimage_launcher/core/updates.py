@@ -7,7 +7,7 @@ import json
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from appimage_launcher.core.elf import read_sha256_sig, read_upd_info
@@ -22,11 +22,7 @@ class UpdateInfo:
 
     kind: str  # zsync, gh-releases-zsync, gh-releases-direct, pling-v1-zsync
     url: str
-    args: list[str] = None
-
-    def __post_init__(self):
-        if self.args is None:
-            self.args = []
+    args: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -371,7 +367,7 @@ class UpdateCache:
 
         try:
             with open(cache_file) as f:
-                data = json.load(f)
+                data: dict = json.load(f)
             # Check if cache is expired (default 1 hour)
             if time.time() - data.get("timestamp", 0) > 3600:
                 return None

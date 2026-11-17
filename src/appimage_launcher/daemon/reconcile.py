@@ -57,7 +57,7 @@ class Reconciler:
         apps_by_path = {a.path: a for a in db_apps}
 
         # Track which DB apps we've seen
-        seen_db_apps = set()
+        seen_db_apps: set[int] = set()
 
         # 3. Match each file to a database record
         for file_path, meta in app_files:
@@ -75,14 +75,14 @@ class Reconciler:
         fix_stats = self._fix_drifted_integration(db_apps)
         stats.update(fix_stats)
 
-        logger.info("Reconciliation complete", **stats)
+        logger.info("Reconciliation complete", extra=stats)
         return stats
 
     def _scan_applications_dir(self) -> list[tuple[Path, Any]]:
         """Scan the Applications directory for valid AppImages."""
         import fnmatch
 
-        results = []
+        results: list[tuple[Path, Any]] = []
 
         if not self.paths.applications_dir.exists():
             return results
@@ -167,7 +167,7 @@ class Reconciler:
                 app.mtime_ns = stat.st_mtime_ns
                 app.updated_at = int(time.time())
                 self.db.update_app(app)
-                self._update_integration(app, meta)
+                self._update_integration(app, meta, file_path)
                 return stats
 
         # Try match by tombstone

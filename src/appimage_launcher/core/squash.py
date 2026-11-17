@@ -117,7 +117,7 @@ def extract_icon(appimage_path: Path, offset: int, dest_dir: Path, icon_name: st
             )
 
             # Find icon files
-            icon_files = []
+            icon_files: list[Path] = []
             for pattern in [".DirIcon", f"**/{icon_name}.*"]:
                 icon_files.extend(tmpdir_path.rglob(pattern))
 
@@ -135,6 +135,8 @@ def extract_icon(appimage_path: Path, offset: int, dest_dir: Path, icon_name: st
             icon_files.sort(
                 key=lambda p: (p.suffix != ".png", p.suffix != ".svg", -p.stat().st_size)
             )
+            if not icon_files:
+                return None
             target = dest_dir / icon_files[0].name
             icon_files[0].rename(target)
             return target
@@ -162,7 +164,7 @@ def extract_metainfo(appimage_path: Path, offset: int, dest_dir: Path) -> list[P
                 cwd=tmpdir_path,
             )
 
-            metainfo_files = []
+            metainfo_files: list[Path] = []
             for pattern in ["usr/share/metainfo/*.xml", "usr/share/appdata/*.xml"]:
                 # Use rglob for recursive glob
                 metainfo_files.extend(tmpdir_path.rglob(pattern))
@@ -181,10 +183,9 @@ def extract_metainfo(appimage_path: Path, offset: int, dest_dir: Path) -> list[P
 
 def extract_all(appimage_path: Path, offset: int, dest_dir: Path) -> dict[str, list[Path]]:
     """Extract all relevant files from AppImage."""
+    desktop_file = extract_desktop_file(appimage_path, offset, dest_dir)
     return {
-        "desktop": [extract_desktop_file(appimage_path, offset, dest_dir)]
-        if extract_desktop_file(appimage_path, offset, dest_dir)
-        else [],
+        "desktop": [desktop_file] if desktop_file else [],
         "icons": [],  # Would need icon name from desktop file
         "metainfo": extract_metainfo(appimage_path, offset, dest_dir),
     }

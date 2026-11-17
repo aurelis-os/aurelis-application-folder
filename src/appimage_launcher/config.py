@@ -77,6 +77,7 @@ class Config:
     update: UpdateConfig = field(default_factory=UpdateConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     gui: GuiConfig = field(default_factory=GuiConfig)
+    conflict_preferences: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Config:
@@ -125,6 +126,9 @@ class Config:
                 use_dialogs=gui_data.get("use_dialogs", True),
             )
 
+        if "conflict_preferences" in data:
+            config.conflict_preferences = data["conflict_preferences"]
+
         return config
 
     def to_dict(self) -> dict[str, Any]:
@@ -153,6 +157,7 @@ class Config:
             "gui": {
                 "use_dialogs": self.gui.use_dialogs,
             },
+            "conflict_preferences": self.conflict_preferences,
         }
 
     def merge_env_overrides(self) -> None:
@@ -296,6 +301,9 @@ def _merge_configs(base: Config, override: Config) -> Config:
         else base.gui.use_dialogs,
     )
 
+    # Conflict preferences
+    result.conflict_preferences = {**base.conflict_preferences, **override.conflict_preferences}
+
     return result
 
 
@@ -314,11 +322,52 @@ def reset_config() -> None:
 
 
 def save_user_config(config: Config) -> None:
-    """Save config to user config file."""
+    """Save conflict_preferences to user config file.
+
+    Reads the existing user config, updates only [conflict_preferences],
+    and writes it back atomically via a temp file + rename.
+
+    Raises:
+        tomllib.TOMLDecodeError: If existing config.toml exists but cannot be parsed.
+        OSError: If the file cannot be read (permission, I/O error, etc.).
+        UnicodeDecodeError: If the file contains invalid UTF-8.
+    """
+    from appimage_launcher.constants import DEFAULT_CONFIG_DIR
+
     user_config_path = Path(DEFAULT_CONFIG_DIR).expanduser() / "config.toml"
     user_config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(user_config_path, "wb") as f:
-        tomli_w.dump(config.to_dict(), f)
+
+    # Read existing user config (not merged config)
+    existing_data = {}
+    if user_config_path.exists():
+        with open(user_config_path, "rb") as f:
+            existing_data = tomllib.load(f)
+
+    # Update only conflict_preferences (merge with existing)
+    if "conflict_preferences" not in existing_data:
+        existing_data["conflict_preferences"] = {}
+    existing_data["conflict_preferences"].update(config.conflict_preferences)
+
+    # Write atomically: temp file + rename
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb", dir=user_config_path.parent, delete=False, prefix=".config.", suffix=".tmp"
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+        try:
+            tomli_w.dump(existing_data, tmp)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            # Atomic rename
+            tmp_path.replace(user_config_path)
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
 
 
 def get_default_config_toml() -> str:

@@ -115,7 +115,7 @@ ci: deps-check lint test
 .PHONY: run
 run:
 	@mkdir -p .dev/Applications .dev/.config/appimage-launcher .dev/.local/state/appimage-launcher .dev/.local/share/applications .dev/.local/share/icons/hicolor
-	APPIMAGE_LAUNCHER_HOME=./.dev $(PYTHON) -m appimage_launcher.cli daemon --dir .dev/Applications -v
+	APPIMAGE_LAUNCHER_HOME=./.dev PYTHONPATH=src $(PYTHON) -m appimage_launcher.daemon --dir .dev/Applications --dev
 
 # Installation
 .PHONY: install

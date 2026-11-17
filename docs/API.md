@@ -172,7 +172,7 @@ Installs an AppImage from any path. Already inside the Applications dir = adopt 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `source_action` | `copy` \| `move` | config `install.source_action` | Copy or move a file outside the dir. Use `move` for downloaded cache files. |
-| `conflict` | `config` \| `replace` \| `keep` \| `cancel` \| `error` | `config` | Behavior when same `app_id` is already primary. `config` uses `install.conflict_policy`. `error` raises `ConflictPending` with JSON payload (no notification). |
+| `conflict` | `config` \| `replace` \| `keep` \| `cancel` \| `error` \| `ask` | `config` | Behavior when same `app_id` is already primary. `config` uses `install.conflict_policy`. `ask` uses stored preferences (replace/keep) if available, otherwise raises `ConflictPending`. `error` raises `ConflictPending` with JSON payload (no notification), ignoring stored preferences. |
 | `origin` | string (JSON) | none | Origin record (see [Origin Record](#origin-record)). |
 | `silent` | boolean | false | Suppress success notification. Failures and `ask` conflicts still notify. |
 | `name` | string | derived | Managed-name override; sets `name_origin='user'`. |
@@ -307,12 +307,40 @@ Checks for updates for specified apps.
 
 ---
 
-### `Update(name: s) → ()`
+### `Update(name: s) → s`
 
 Triggers a zsync update for an app. Emits `UpdateProgress` signals.
 
 **Arguments:**
 - `name` (string): Managed name or app_id.
+
+**Returns:** JSON string with the update result:
+
+```json
+{
+  "success": true,
+  "output_path": "/path/to/updated.AppImage",
+  "error": null,
+  "signature_verified": true
+}
+```
+
+Or on failure:
+
+```json
+{
+  "success": false,
+  "output_path": null,
+  "error": "Error description",
+  "signature_verified": false
+}
+```
+
+**Fields:**
+- `success` (boolean): Whether the update succeeded.
+- `output_path` (string or null): Path to the updated AppImage on success.
+- `error` (string or null): Error message on failure.
+- `signature_verified` (boolean): Whether the updated AppImage's signature was verified.
 
 **Errors:** `NotFound`, `Ambiguous`, `PolicyForbids` (catalog-linked), `Busy`, `Io`.
 

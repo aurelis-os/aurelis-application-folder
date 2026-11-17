@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from appimage_launcher.constants import (
     NOTIFICATION_APP_NAME,
@@ -58,8 +59,8 @@ class Notifier:
         self._throttle_timestamps: dict[str, float] = {}  # app_id -> last notification time
 
         # D-Bus connection for notifications
-        self._bus = None
-        self._notifications_interface = None
+        self._bus: Any = None
+        self._notifications_interface: Any = None
 
         # Register default action handlers
         self._register_default_handlers()
@@ -391,7 +392,7 @@ class FakeNotificationServer:
         self.notifications: list[Notification] = []
         self.action_invocations: list[tuple[int, str]] = []
         self.closed_notifications: list[tuple[int, int]] = []  # (id, reason)
-        self._next_id = 0
+        self._next_id: int = 0
 
     def notify(
         self,
@@ -416,11 +417,11 @@ class FakeNotificationServer:
 
         notification = Notification(
             id=notification_id,
-            app_id=hints.get("app-id", ""),
+            app_id=str(hints.get("app-id", "")),
             title=title,
             body=body,
             actions=action_list,
-            kind=hints.get("category", ""),
+            kind=str(hints.get("category", "")),
             timestamp=time.time(),
             replaces_id=replaces_id,
         )

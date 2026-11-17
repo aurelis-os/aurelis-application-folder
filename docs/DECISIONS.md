@@ -130,3 +130,22 @@ Each decision entry includes:
 **Rationale**: Single source of truth for D-Bus names, API version, default paths, etc. Makes it easy to change the D-Bus service name in one place (per risk #9 in spec).
 
 **Impact**: All modules import from `appimage_launcher.constants`.
+
+---
+
+## 2026-11-16: Stored Conflict Preferences Scope
+
+**Context**: The `conflict_preferences` config section stores user decisions ("replace" or "keep") for specific app_ids when a conflict occurs during installation with `conflict="ask"` or when the config's `install.conflict_policy` is "ask". The question arose whether these stored preferences should also apply when a caller explicitly passes `conflict="error"`.
+
+**Options Considered**:
+1. Apply stored preferences for all conflict policies (including explicit "error")
+2. Apply stored preferences only for "config"/"ask", never for explicit "error"
+
+**Decision**: Stored preferences apply only for conflict "config" and "ask", never for explicit "error".
+
+**Rationale**: The Software Center (and other front-ends) uses `conflict="error"` to explicitly request a user prompt for every conflict, regardless of past decisions. If stored preferences applied to "error", the Software Center could not guarantee a prompt appears. By restricting stored preferences to "config"/"ask", we ensure:
+- `conflict="config"` (default): Uses config's `install.conflict_policy`; if that is "ask", stored preferences apply
+- `conflict="ask"`: Explicitly asks, using stored preferences if available
+- `conflict="error"`: Always prompts, ignoring any stored preference
+
+**Impact**: `Manager._handle_conflict` in `core/manager.py` only checks `conflict_preferences` when `conflict_policy` is "ask" (after resolving "config" to "ask"). When `conflict_policy` is "error" (explicit or from "ask" with no stored preference), it raises `ConflictPendingError` without consulting preferences.

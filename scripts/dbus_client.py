@@ -31,7 +31,7 @@ import logging
 import sys
 from typing import Any
 
-from dbus_fast import BusType
+from dbus_fast import BusType, Variant
 from dbus_fast.aio import MessageBus
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,21 @@ logger = logging.getLogger(__name__)
 DBUS_SERVICE_NAME = "io.github.appimage_launcher.Manager"
 DBUS_OBJECT_PATH = "/io/github/appimage_launcher/Manager"
 DBUS_INTERFACE_NAME = "io.github.appimage_launcher.Manager1"
+
+
+def _wrap_variants(d: dict[str, Any]) -> dict[str, Any]:
+    """Wrap boolean values in Variant for D-Bus a{sv} dict."""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, bool):
+            result[k] = Variant("b", v)
+        elif isinstance(v, int):
+            result[k] = Variant("i", v)
+        elif isinstance(v, str):
+            result[k] = Variant("s", v)
+        else:
+            result[k] = v
+    return result
 
 
 class ManagerClient:
@@ -115,13 +130,13 @@ class ManagerClient:
     async def install(self, path: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         if options is None:
             options = {}
-        result_json = await self.iface.call_install(path, options)
+        result_json = await self.iface.call_install(path, _wrap_variants(options))
         return json.loads(result_json)
 
     async def remove(self, name: str, options: dict[str, Any] | None = None) -> None:
         if options is None:
             options = {}
-        await self.iface.call_remove(name, options)
+        await self.iface.call_remove(name, _wrap_variants(options))
 
     async def rename(self, name: str, new_name: str) -> dict[str, Any]:
         result_json = await self.iface.call_rename(name, new_name)
@@ -130,7 +145,7 @@ class ManagerClient:
     async def list(
         self, all_apps: bool = False, compute_hash: bool = False
     ) -> list[dict[str, Any]]:
-        options = {"all": all_apps, "hash": compute_hash}
+        options = _wrap_variants({"all": all_apps, "hash": compute_hash})
         result_json = await self.iface.call_list(options)
         return json.loads(result_json)
 
@@ -145,8 +160,9 @@ class ManagerClient:
         result_json = await self.iface.call_check_updates(names)
         return json.loads(result_json)
 
-    async def update(self, name: str) -> None:
-        await self.iface.call_update(name)
+    async def update(self, name: str) -> dict[str, Any]:
+        result_json = await self.iface.call_update(name)
+        return json.loads(result_json)
 
     async def revert(self, name: str) -> None:
         await self.iface.call_revert(name)

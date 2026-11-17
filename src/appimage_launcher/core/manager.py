@@ -202,10 +202,47 @@ class Manager:
         is_self_update: bool = False,
     ) -> InstallResult:
         """Handle conflict with existing app."""
-        compare_versions(old_app.version, new_meta.version)
+        relation = compare_versions(old_app.version, new_meta.version)
 
+        # Resolve "config" to actual policy
         if conflict_policy == "config":
             conflict_policy = self.config.install.conflict_policy
+
+        # Handle "ask" policy: check stored preferences, otherwise raise ConflictPending
+        if conflict_policy == "ask":
+            app_id = old_app.app_id
+            if app_id in self.config.conflict_preferences:
+                stored_decision = self.config.conflict_preferences[app_id]
+                if stored_decision == "replace":
+                    # Only apply stored "replace" if new version is newer
+                    if relation == VersionRelation.UPGRADE:
+                        logger.info(
+                            "Using stored conflict preference: replace (newer version)",
+                            app_id=app_id,
+                        )
+                        conflict_policy = "replace"
+                    else:
+                        # For same or older version, don't auto-replace; require decision
+                        logger.info(
+                            "Stored replace preference ignored: new version not newer",
+                            app_id=app_id,
+                            relation=relation.name,
+                        )
+                        conflict_policy = "error"
+                elif stored_decision == "keep":
+                    logger.info("Using stored conflict preference: keep", app_id=app_id)
+                    conflict_policy = "keep"
+                else:
+                    # Unknown stored preference - fall back to error
+                    logger.warning(
+                        "Unknown stored conflict preference, falling back to error",
+                        app_id=app_id,
+                        stored_decision=stored_decision,
+                    )
+                    conflict_policy = "error"
+            else:
+                # No stored preference, require user decision
+                conflict_policy = "error"
 
         if conflict_policy == "replace":
             return self._replace_app(
@@ -228,6 +265,10 @@ class Manager:
             # Return conflict info for caller to handle
             raise ConflictPendingError(
                 conflict_id="",  # Will be set by caller
+                old_app=old_app,
+                new_meta=new_meta,
+                relation=relation,
+                is_self_update=is_self_update,
                 message="Conflict requires decision",
             )
         else:
@@ -244,30 +285,75 @@ class Manager:
         update_policy: str,
         is_self_update: bool = False,
     ) -> InstallResult:
-        """Replace existing app with new version."""
+        """Replace existing app with new version by updating the existing record."""
         # Move old to .previous
         previous_path = self._move_to_previous(old_app)
 
-        # Install new at old location (keeping user-chosen name)
+        # Save old version and size BEFORE mutating the record
+        old_version = old_app.version
+        old_size = old_app.size
+
+        # Stage the new file at the target location
         target_path = Path(old_app.path)
-        result = self._do_install(
-            source_path,
-            target_path,
-            new_meta,
-            source_action,
-            origin or old_app.origin,
-            silent,
-            update_policy,
-            name_origin=old_app.name_origin,
-            previous_path=previous_path,
-        )
+        try:
+            # Stage and integrate using shared helper
+            stat, sha256, now = self._stage_and_integrate(
+                source_path=source_path,
+                target_path=target_path,
+                meta=new_meta,
+                source_action=source_action,
+                origin=origin,
+                name_origin=old_app.name_origin,
+                categories=new_meta.categories,
+                comment=new_meta.comment,
+                version=new_meta.version,
+                app_id=new_meta.app_id,
+                update_policy=update_policy,
+            )
 
-        # If this is a self-update, mark the new app as self_managed
-        if is_self_update:
-            result.app.self_managed = True
-            self.db.update_app(result.app)
+            # Update the existing app record with new metadata
+            old_app.size = stat.st_size
+            old_app.mtime_ns = stat.st_mtime_ns
+            old_app.fingerprint = new_meta.fingerprint
+            old_app.version = new_meta.version
+            old_app.update_info = new_meta.update_info
+            old_app.update_policy = update_policy
+            old_app.sha256 = sha256
+            old_app.updated_at = now
+            old_app.device = stat.st_dev
+            old_app.inode = stat.st_ino
+            old_app.origin = origin or old_app.origin
+            if is_self_update:
+                old_app.self_managed = True
+            self.db.update_app(old_app)
 
-        return result
+            # Record backup with OLD version and size
+            if previous_path:
+                from appimage_launcher.core.state import BackupRecord
+
+                backup = BackupRecord(
+                    id=0,
+                    app_id=new_meta.app_id,
+                    path=previous_path,
+                    version=old_version,
+                    size=old_size,
+                    created_at=now,
+                )
+                self.db.insert_backup(backup)
+
+            # Log event with correct old -> new version
+            self.db.insert_event(
+                "updated", new_meta.app_id, f"Updated {old_version} -> {new_meta.version}"
+            )
+
+            logger.info("Replaced app", app_id=new_meta.app_id, path=str(target_path))
+            return InstallResult(app=old_app, changed=True, previous=previous_path)
+
+        except Exception:
+            # Rollback: move file back from .previous
+            if previous_path and Path(previous_path).exists():
+                Path(previous_path).rename(target_path)
+            raise
 
     def _keep_both(
         self,
@@ -280,15 +366,18 @@ class Manager:
         update_policy: str,
     ) -> InstallResult:
         """Keep both versions - rename old to kept, install new as primary."""
+        # Save original name for the new app
+        original_name = old_app.managed_name
+        original_path = Path(old_app.path)
+
         # Generate kept name for old app
         existing_names = set(self._get_existing_apps_dict().keys())
         kept_name = generate_kept_name(old_app.managed_name, old_app.version, existing_names)
         kept_path = self.paths.applications_dir / kept_name
 
         # Rename old file
-        old_path = Path(old_app.path)
-        if old_path.exists():
-            old_path.rename(kept_path)
+        if original_path.exists():
+            original_path.rename(kept_path)
 
         # Update old app record to kept
         old_app.role = "kept"
@@ -317,9 +406,8 @@ class Manager:
             version_slug=old_app.version or "old",
         )
 
-        # Install new as primary
-        target_name = old_app.managed_name  # Keep the original name
-        target_path = self.paths.applications_dir / target_name
+        # Install new as primary at original location
+        target_path = self.paths.applications_dir / original_name
         return self._do_install(
             source_path,
             target_path,
@@ -331,19 +419,24 @@ class Manager:
             name_origin=old_app.name_origin,
         )
 
-    def _do_install(
+    def _stage_and_integrate(
         self,
         source_path: Path,
         target_path: Path,
         meta: Any,
         source_action: str,
         origin: str | None,
-        silent: bool,
-        update_policy: str,
         name_origin: str,
-        previous_path: str | None = None,
-    ) -> InstallResult:
-        """Perform the actual installation."""
+        categories: list[str],
+        comment: str | None,
+        version: str,
+        app_id: str,
+        update_policy: str = "auto",
+    ) -> tuple[os.stat_result, str, int]:
+        """Stage file and perform integration (xattr, desktop entry, icon, caches).
+
+        Returns (stat, sha256, now_timestamp).
+        """
         # Stage the file
         if source_path != target_path:
             if source_action == "move":
@@ -380,15 +473,17 @@ class Manager:
             logger.warning("Failed to set xattr", path=str(target_path), error=str(e))
 
         # Write desktop entry
+        import json
+
         write_desktop_entry(
-            app_id=meta.app_id,
+            app_id=app_id,
             display_name=meta.name,
             exec_path=target_path,
-            icon_name=f"appimage-{meta.app_id}",
-            categories=meta.categories,
-            comment=meta.comment,
-            startup_wm_class=None,  # Would need from desktop
-            version=meta.version,
+            icon_name=f"appimage-{app_id}",
+            categories=categories,
+            comment=comment,
+            startup_wm_class=None,
+            version=version,
             name_origin=name_origin,
             update_policy=update_policy,
             catalog_id=json.loads(origin).get("catalog_id") if origin else None,
@@ -397,10 +492,43 @@ class Manager:
 
         # Install icon
         if meta.icon_bytes and meta.icon_ext:
-            install_icons(meta.app_id, meta.icon_bytes, meta.icon_ext)
+            install_icons(app_id, meta.icon_bytes, meta.icon_ext)
+
+        # Refresh caches
+        refresh_caches()
+
+        now = int(time.time())
+        return stat, sha256, now
+
+    def _do_install(
+        self,
+        source_path: Path,
+        target_path: Path,
+        meta: Any,
+        source_action: str,
+        origin: str | None,
+        silent: bool,
+        update_policy: str,
+        name_origin: str,
+        previous_path: str | None = None,
+    ) -> InstallResult:
+        """Perform the actual installation."""
+        # Stage and integrate
+        stat, sha256, now = self._stage_and_integrate(
+            source_path=source_path,
+            target_path=target_path,
+            meta=meta,
+            source_action=source_action,
+            origin=origin,
+            name_origin=name_origin,
+            categories=meta.categories,
+            comment=meta.comment,
+            version=meta.version,
+            app_id=meta.app_id,
+            update_policy=update_policy,
+        )
 
         # Create database record
-        now = int(time.time())
         app = AppRecord(
             id=0,
             app_id=meta.app_id,
@@ -420,7 +548,7 @@ class Manager:
             update_policy=update_policy,
             self_managed=False,
             origin=origin,
-            sha256=sha256,  # Store SHA-256 for idempotent installs
+            sha256=sha256,
             installed_at=now,
             updated_at=now,
         )
@@ -437,9 +565,6 @@ class Manager:
                 created_at=now,
             )
             self.db.insert_backup(backup)
-
-        # Refresh caches
-        refresh_caches()
 
         # Log event
         self.db.insert_event(

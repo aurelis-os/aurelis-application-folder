@@ -162,7 +162,8 @@ class RunningTracker:
                         old_path=old_app.path,
                         new_path=new_path,
                     )
-                    self.on_self_update(meta.app_id, Path(new_path))
+                    if self.on_self_update:
+                        self.on_self_update(meta.app_id, Path(new_path))
                     return
 
             # Also check tombstones for recently removed apps with same app_id
@@ -211,7 +212,8 @@ class RunningTracker:
                     new_path=str(new_path),
                     tombstone_removed_at=tombstone.removed_at,
                 )
-                self.on_self_update(app_id, new_path)
+                if self.on_self_update:
+                    self.on_self_update(app_id, new_path)
                 return True
 
         except Exception as e:

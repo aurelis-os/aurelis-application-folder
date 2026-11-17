@@ -8,6 +8,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import tomllib
+import uuid
 from pathlib import Path
 
 from dbus_fast import BusType
@@ -27,7 +29,6 @@ from appimage_launcher.core.exceptions import (
     ConflictPendingError,
     InvalidAppImageError,
     InvalidArgumentError,
-    IoError,
     NotFoundError,
     PolicyForbidsError,
     UnsupportedTypeError,
@@ -37,6 +38,31 @@ from appimage_launcher.core.manager import Manager
 from appimage_launcher.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Conflict expiry time (10 minutes)
+CONFLICT_EXPIRY_SECONDS = 600
+
+
+def _format_conflict_payload(e: ConflictPendingError) -> dict:
+    """Format conflict info for D-Bus signal."""
+    return {
+        "id": e.conflict_id,
+        "old_app": {
+            "app_id": e.old_app.app_id,
+            "name": e.old_app.display_name,
+            "version": e.old_app.version,
+            "managed_name": e.old_app.managed_name,
+            "path": e.old_app.path,
+        },
+        "new_meta": {
+            "name": e.new_meta.name,
+            "version": e.new_meta.version,
+            "app_id": e.new_meta.app_id,
+            "size": e.new_meta.size,
+        },
+        "relation": e.relation.name.lower(),
+        "is_self_update": e.is_self_update,
+    }
 
 
 class ManagerInterface(ServiceInterface):
@@ -77,6 +103,18 @@ class ManagerInterface(ServiceInterface):
         # Pending conflicts for ResolveConflict
         self._pending_conflicts: dict[str, dict] = {}
 
+    def _cleanup_expired_conflicts(self) -> None:
+        """Remove expired pending conflicts."""
+        now = time.time()
+        expired = [
+            cid
+            for cid, conflict in self._pending_conflicts.items()
+            if now - conflict["created_at"] > CONFLICT_EXPIRY_SECONDS
+        ]
+        for cid in expired:
+            self._pending_conflicts.pop(cid, None)
+            logger.debug("Expired conflict removed", conflict_id=cid)
+
     # Properties
 
     @dbus_property(access=PropertyAccess.READ, name="ApplicationsDir")
@@ -100,8 +138,14 @@ class ManagerInterface(ServiceInterface):
     # Methods
 
     @method(name="Inspect")
-    def inspect(self, path: "s") -> "s":
+    async def inspect(self, path: "s") -> "s":
         """Read metadata from an AppImage without installing it."""
+        return await asyncio.to_thread(self._do_inspect, path)
+
+    def _do_inspect(self, path: str) -> str:
+        """Perform the inspect operation."""
+        import base64
+
         from appimage_launcher.core.identity import compute_full_sha256
         from appimage_launcher.core.metadata import read_appimage_meta
         from appimage_launcher.core.versions import VersionRelation, compare_versions
@@ -128,6 +172,11 @@ class ManagerInterface(ServiceInterface):
             if installed_app:
                 relation = compare_versions(installed_app.version, meta.version)
 
+        # Encode icon as base64 if present
+        icon_png_base64 = None
+        if meta.icon_bytes and meta.icon_ext == "png":
+            icon_png_base64 = base64.b64encode(meta.icon_bytes).decode("ascii")
+
         result = {
             "type": meta.type,
             "name": meta.name,
@@ -135,7 +184,7 @@ class ManagerInterface(ServiceInterface):
             "app_id": meta.app_id,
             "comment": meta.comment,
             "categories": meta.categories,
-            "icon_png_base64": None,  # TODO: encode icon
+            "icon_png_base64": icon_png_base64,
             "icon_ext": meta.icon_ext,
             "update_info": meta.update_info,
             "has_signature": meta.has_signature,
@@ -174,7 +223,7 @@ class ManagerInterface(ServiceInterface):
         update_policy = unwrap(options.get("update_policy", "auto"))
 
         # Validate conflict option
-        if conflict not in ("config", "replace", "keep", "cancel", "error"):
+        if conflict not in ("config", "replace", "keep", "cancel", "error", "ask"):
             raise DBusError(
                 InvalidArgumentError.get_dbus_error_name(), f"Invalid conflict option: {conflict}"
             )
@@ -182,10 +231,9 @@ class ManagerInterface(ServiceInterface):
         # Resolve "config" conflict policy
         if conflict == "config":
             conflict = self.config.install.conflict_policy
-            # "ask" requires user interaction - map to "error" for API callers
-            # so they can handle it via ConflictPending signal
-            if conflict == "ask":
-                conflict = "error"
+            # "ask" requires user interaction - pass "ask" to manager so it can
+            # check stored preferences before raising ConflictPending
+            # Other policies (replace, keep, cancel) are passed through directly
 
         # Validate origin if provided
         if origin:
@@ -228,12 +276,35 @@ class ManagerInterface(ServiceInterface):
                 }
             )
 
-        except ConflictPendingError:
-            conflict_id = f"conflict_{int(time.time() * 1000)}"
-            # We need to get the conflict info from the manager
-            # The manager should have raised ConflictPendingError with conflict info
-            # For now, we'll need to re-fetch or pass it differently
-            # Let's catch the exception from manager and extract info
+        except ConflictPendingError as e:
+            # Clean up expired conflicts before adding new one
+            self._cleanup_expired_conflicts()
+
+            # Generate conflict_id
+            conflict_id = uuid.uuid4().hex
+
+            # Store conflict data for ResolveConflict
+            # Use the new AppImage's source_path (the path parameter), not the old app's path
+            self._pending_conflicts[conflict_id] = {
+                "old_app": e.old_app,
+                "new_meta": e.new_meta,
+                "relation": e.relation,
+                "is_self_update": e.is_self_update,
+                "source_path": str(source_path),
+                "options": {
+                    "name": name,
+                    "source_action": source_action,
+                    "origin": origin,
+                    "silent": silent,
+                    "update_policy": update_policy,
+                },
+                "created_at": time.time(),
+            }
+
+            # Format conflict payload for signal
+            payload = json.dumps(_format_conflict_payload(e))
+            # Emit signal with generated conflict_id
+            self.conflict_pending(conflict_id, payload)
             raise DBusError(ConflictPendingError.get_dbus_error_name(), conflict_id) from None
 
         except Exception as e:
@@ -250,8 +321,9 @@ class ManagerInterface(ServiceInterface):
         try:
             await asyncio.wait_for(self._mutation_lock.acquire(), timeout=self._lock_timeout)
         except TimeoutError as err:
-            raise Exception(
-                f"{self.ERROR_BUSY}: Could not acquire lock within {self._lock_timeout}s"
+            raise DBusError(
+                BusyError.get_dbus_error_name(),
+                f"Could not acquire lock within {self._lock_timeout}s",
             ) from err
 
         try:
@@ -260,11 +332,13 @@ class ManagerInterface(ServiceInterface):
             silent = options.get("silent", False)
 
             if file_action == "purge" and not confirm:
-                raise Exception(f"{self.ERROR_INVALID_ARGUMENT}: Purge requires confirm=true")
+                raise DBusError(
+                    InvalidArgumentError.get_dbus_error_name(), "Purge requires confirm=true"
+                )
 
             app = self.manager._find_app_by_name(name)
             if not app:
-                raise Exception(f"{self.ERROR_NOT_FOUND}: App not found: {name}")
+                raise DBusError(NotFoundError.get_dbus_error_name(), f"App not found: {name}")
 
             app_id = app.app_id
             await asyncio.to_thread(
@@ -307,12 +381,15 @@ class ManagerInterface(ServiceInterface):
             self._mutation_lock.release()
 
     @method(name="List")
-    def list(self, options: "a{sv}") -> "s":
+    async def list(self, options: "a{sv}") -> "s":
         """List installed apps."""
         all_apps = options.get("all", False)
         compute_hash = options.get("hash", False)
 
-        apps = self.manager.db.list_apps(include_kept=all_apps)
+        # Run DB query and hash computation in thread to avoid blocking
+        apps = await asyncio.to_thread(
+            self.manager.db.list_apps, include_kept=all_apps, compute_hash=compute_hash
+        )
         result = [self._app_to_dict(app, include_hash=compute_hash) for app in apps]
         return json.dumps(result)
 
@@ -416,8 +493,8 @@ class ManagerInterface(ServiceInterface):
         return json.dumps(results)
 
     @method(name="Update")
-    async def update(self, name: "s") -> "":
-        """Update an app (trigger zsync update)."""
+    async def update(self, name: "s") -> "s":
+        """Update an app (trigger zsync update). Returns JSON with result."""
         # Acquire lock with timeout
         try:
             await asyncio.wait_for(self._mutation_lock.acquire(), timeout=self._lock_timeout)
@@ -448,9 +525,24 @@ class ManagerInterface(ServiceInterface):
             if result.success:
                 self.update_progress(name, 100, "done")
                 self.apps_changed("updated", app.app_id, "api")
+                return json.dumps(
+                    {
+                        "success": True,
+                        "output_path": str(result.output_path) if result.output_path else None,
+                        "error": None,
+                        "signature_verified": result.signature_verified,
+                    }
+                )
             else:
                 self.update_progress(name, 0, "error")
-                raise DBusError(IoError.get_dbus_error_name(), result.error)
+                return json.dumps(
+                    {
+                        "success": False,
+                        "output_path": None,
+                        "error": result.error or "Unknown error",
+                        "signature_verified": False,
+                    }
+                )
 
         finally:
             self._mutation_lock.release()
@@ -481,44 +573,90 @@ class ManagerInterface(ServiceInterface):
     @method(name="ResolveConflict")
     async def resolve_conflict(self, conflict_id: "s", decision: "s", remember: "b") -> "":
         """Resolve a pending conflict."""
-        if conflict_id not in self._pending_conflicts:
-            raise DBusError(NotFoundError.get_dbus_error_name(), f"Unknown conflict: {conflict_id}")
+        # Clean up expired conflicts first
+        self._cleanup_expired_conflicts()
 
-        if decision not in ("replace", "keep", "cancel"):
-            raise DBusError(
-                InvalidArgumentError.get_dbus_error_name(), f"Invalid decision: {decision}"
-            )
-
-        conflict = self._pending_conflicts.pop(conflict_id)
-        conflict["old_app"]
-        conflict["new_meta"]
-        source_path = Path(conflict["source_path"])
-        options = conflict["options"]
-
-        if decision == "cancel":
-            # Leave the file where it is
-            return
-
-        # Re-run install with explicit decision
-        options["conflict"] = decision
+        # Acquire mutation lock with timeout (same as other mutating methods)
         try:
-            result = await asyncio.to_thread(
-                self.manager.install,
-                source_path,
-                name=options.get("name"),
-                source_action=options.get("source_action", "copy"),
-                conflict_policy=decision,
-                origin=options.get("origin"),
-                silent=options.get("silent", False),
-                update_policy=options.get("update_policy", "auto"),
-            )
+            await asyncio.wait_for(self._mutation_lock.acquire(), timeout=self._lock_timeout)
+        except TimeoutError as err:
+            raise DBusError(
+                BusyError.get_dbus_error_name(),
+                f"Could not acquire lock within {self._lock_timeout}s",
+            ) from err
 
-            self.apps_changed("installed", result.app.app_id, "api")
-        except Exception as e:
-            dbus_error = map_exception_to_dbus_error(e)
-            if isinstance(dbus_error, DBusError):
-                raise dbus_error from e
-            raise
+        try:
+            if conflict_id not in self._pending_conflicts:
+                raise DBusError(
+                    NotFoundError.get_dbus_error_name(), f"Unknown conflict: {conflict_id}"
+                )
+
+            if decision not in ("replace", "keep", "cancel"):
+                raise DBusError(
+                    InvalidArgumentError.get_dbus_error_name(), f"Invalid decision: {decision}"
+                )
+
+            conflict = self._pending_conflicts[conflict_id]
+            source_path = Path(conflict["source_path"])
+            options = conflict["options"]
+            old_app = conflict["old_app"]
+            app_id = old_app.app_id
+
+            if decision == "cancel":
+                # Leave the file where it is, remove conflict
+                self._pending_conflicts.pop(conflict_id, None)
+                return
+
+            # Check if source file still exists
+            if not source_path.exists():
+                raise DBusError(
+                    NotFoundError.get_dbus_error_name(), f"Source file not found: {source_path}"
+                )
+
+            # Re-run install with explicit decision
+            options["conflict"] = decision
+            try:
+                result = await asyncio.to_thread(
+                    self.manager.install,
+                    source_path,
+                    name=options.get("name"),
+                    source_action=options.get("source_action", "copy"),
+                    conflict_policy=decision,
+                    origin=options.get("origin"),
+                    silent=options.get("silent", False),
+                    update_policy=options.get("update_policy", "auto"),
+                )
+
+                # Success: remove conflict and emit signal
+                self._pending_conflicts.pop(conflict_id, None)
+                self.apps_changed("installed", result.app.app_id, "api")
+
+                # Remember the decision if requested (after success)
+                if remember and decision != "cancel":
+                    self.config.conflict_preferences[app_id] = decision
+                    from appimage_launcher.config import save_user_config
+
+                    try:
+                        await asyncio.to_thread(save_user_config, self.config)
+                    except tomllib.TOMLDecodeError:
+                        # Config parse error: log warning but don't fail the install
+                        logger.warning(
+                            "Failed to save conflict preference: existing config.toml is corrupted",
+                            app_id=app_id,
+                        )
+                    except Exception as e:
+                        # Other save failures: log warning, don't fail the call
+                        logger.warning(
+                            "Failed to save conflict preference", app_id=app_id, error=str(e)
+                        )
+            except Exception as e:
+                # Failure: keep conflict for retry, map and raise error
+                dbus_error = map_exception_to_dbus_error(e)
+                if isinstance(dbus_error, DBusError):
+                    raise dbus_error from e
+                raise
+        finally:
+            self._mutation_lock.release()
 
     @method(name="Reindex")
     async def reindex(self) -> "":
@@ -588,23 +726,23 @@ class ManagerInterface(ServiceInterface):
     # Signals
 
     @signal(name="AppsChanged")
-    def apps_changed(self, kind: str, app_id: str, source: str) -> None:
+    def apps_changed(self, kind: "s", app_id: "s", source: "s") -> "sss":
         """Emitted when apps change."""
-        pass
+        return kind, app_id, source
 
     @signal(name="ConflictPending")
-    def conflict_pending(self, conflict_id: str, json_payload: str) -> None:
+    def conflict_pending(self, conflict_id: "s", json_payload: "s") -> "ss":
         """Emitted when a conflict needs resolution."""
-        pass
+        return conflict_id, json_payload
 
     @signal(name="UpdateProgress")
-    def update_progress(self, name: str, percent: int, state: str) -> None:
+    def update_progress(self, name: "s", percent: "i", state: "s") -> "sis":
         """Emitted during update progress."""
-        pass
+        return name, percent, state
 
     # Helper methods
 
-    def _app_to_dict(self, app, include_hash: bool = False) -> dict:
+    def _app_to_dict(self, app, include_hash: bool = False) -> dict | None:
         """Convert AppRecord to dictionary."""
         if app is None:
             return None

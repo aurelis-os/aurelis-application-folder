@@ -201,11 +201,15 @@ class TestManager:
             assert call_kwargs.get("catalog_id") == "org.kde.kate"
             assert call_kwargs.get("origin_source") == "aurelis-catalog"
 
-    @pytest.mark.xfail(
-        reason="Manager has bug: unique constraint conflict on apps.path during conflict resolution"
-    )
     def test_install_conflict_replace(self):
-        """Test conflict resolution with replace policy."""
+        """Test conflict resolution with replace policy.
+
+        This test was previously xfail due to a bug in Manager._replace_app:
+        the old app's database record was not deleted before installing the new
+        version at the same path, causing a UNIQUE constraint violation on
+        apps.path. The bug was fixed by deleting the old app record in
+        _replace_app before calling _do_install.
+        """
         appimage = self._create_fake_appimage("TestApp", "2.0.0")
 
         # Pre-install old version
@@ -236,9 +240,6 @@ class TestManager:
         # Create the file
         (self.applications_dir / "TestApp").write_bytes(b"old appimage")
 
-        # Delete old app record to avoid unique constraint conflict (manager bug workaround)
-        self.db.delete_app(old_app.id)
-
         with (
             patch("appimage_launcher.core.manager.read_appimage_meta") as mock_read_meta,
             patch("appimage_launcher.core.manager.compute_full_sha256", return_value="newsha256"),
@@ -268,11 +269,15 @@ class TestManager:
             assert result.app.version == "2.0.0"
             assert result.previous is not None
 
-    @pytest.mark.xfail(
-        reason="Manager has bug: unique constraint conflict on apps.path during conflict resolution"
-    )
     def test_install_conflict_keep(self):
-        """Test conflict resolution with keep policy."""
+        """Test conflict resolution with keep policy.
+
+        This test was previously xfail due to a bug in Manager._keep_both:
+        after updating the old app to "kept" with a new managed_name, the code
+        incorrectly used the new kept name for the new app's path instead of
+        the original name. The bug was fixed by saving the original name before
+        updating the old app and using it for the new app's target path.
+        """
         appimage = self._create_fake_appimage("TestApp", "2.0.0")
 
         # Pre-install old version
@@ -301,9 +306,6 @@ class TestManager:
         )
         self.db.insert_app(old_app)
         (self.applications_dir / "TestApp").write_bytes(b"old appimage")
-
-        # Delete old app record to avoid unique constraint conflict (manager bug workaround)
-        self.db.delete_app(old_app.id)
 
         with (
             patch("appimage_launcher.core.manager.read_appimage_meta") as mock_read_meta,
@@ -1141,6 +1143,313 @@ class TestManager:
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             lock_file.close()
+
+    def test_dbus_service_no_raw_exceptions(self):
+        """Ensure dbus_service.py uses typed DBusError exceptions, not raw Exception."""
+        import re
+
+        dbus_service_path = (
+            Path(__file__).parent.parent.parent
+            / "src"
+            / "appimage_launcher"
+            / "daemon"
+            / "dbus_service.py"
+        )
+        content = dbus_service_path.read_text()
+        matches = re.findall(r"raise Exception\(", content)
+        assert not matches, f"Found {len(matches)} raw 'raise Exception(' in dbus_service.py"
+
+    def test_replace_app_rollback_on_failure(self):
+        """Test that _replace_app rolls back file and keeps old record on failure."""
+        # Pre-install old version
+        old_app = AppRecord(
+            id=0,
+            app_id="com.example.testapp",
+            role="primary",
+            display_name="TestApp",
+            managed_name="TestApp",
+            name_origin="auto",
+            orig_filename="test-old.appimage",
+            path=str(self.applications_dir / "TestApp"),
+            device=123,
+            inode=456,
+            size=1000000,
+            mtime_ns=1000000000,
+            fingerprint="old123",
+            version="1.0.0",
+            update_info=None,
+            update_policy="auto",
+            self_managed=False,
+            origin=None,
+            sha256=None,
+            installed_at=1000,
+            updated_at=1000,
+        )
+        old_app.id = self.db.insert_app(old_app)
+        old_file = self.applications_dir / "TestApp"
+        old_file.write_bytes(b"old appimage content")
+
+        appimage = self._create_fake_appimage("TestApp", "2.0.0")
+
+        with (
+            patch("appimage_launcher.core.manager.read_appimage_meta") as mock_read_meta,
+            patch("appimage_launcher.core.manager.compute_full_sha256", return_value="newsha256"),
+            patch("appimage_launcher.core.manager.write_desktop_entry"),
+            patch("appimage_launcher.core.manager.install_icons"),
+            patch("appimage_launcher.core.manager.ensure_executable"),
+            patch("appimage_launcher.core.manager.refresh_caches"),
+            patch("appimage_launcher.core.manager.shutil.copy2"),
+            patch("appimage_launcher.core.manager.shutil.move"),
+        ):
+            mock_read_meta.return_value = self._create_mock_meta(name="TestApp", version="2.0.0")
+
+            # Make shutil.copy2 fail (simulating disk error during staging)
+            def fail_copy2(*args, **kwargs):
+                raise RuntimeError("Disk error")
+
+            with patch("appimage_launcher.core.manager.shutil.copy2", side_effect=fail_copy2):
+                with pytest.raises(RuntimeError, match="Disk error"):
+                    self.manager.install(appimage, conflict_policy="replace")
+
+                # Old app record should still exist
+                apps = self.db.list_apps()
+                assert len(apps) == 1
+                assert apps[0].app_id == "com.example.testapp"
+                assert apps[0].version == "1.0.0"
+
+                # Old file should be restored
+                assert old_file.exists()
+                assert old_file.read_bytes() == b"old appimage content"
+
+                # No backup should have been created in .previous
+                previous_dir = self.applications_dir / ".previous"
+                if previous_dir.exists():
+                    previous_files = list(previous_dir.iterdir())
+                    assert len(previous_files) == 0
+
+    def test_replace_app_logs_correct_version_and_backup_old_version_size(self):
+        """Test that _replace_app logs correct version transition and backup has old version/size."""
+        # Pre-install old version
+        old_app = AppRecord(
+            id=0,
+            app_id="com.example.testapp",
+            role="primary",
+            display_name="TestApp",
+            managed_name="TestApp",
+            name_origin="auto",
+            orig_filename="test-old.appimage",
+            path=str(self.applications_dir / "TestApp"),
+            device=123,
+            inode=456,
+            size=1000000,
+            mtime_ns=1000000000,
+            fingerprint="old123",
+            version="1.0.0",
+            update_info=None,
+            update_policy="auto",
+            self_managed=False,
+            origin=None,
+            sha256=None,
+            installed_at=1000,
+            updated_at=1000,
+        )
+        old_app.id = self.db.insert_app(old_app)
+        old_file = self.applications_dir / "TestApp"
+        old_file.write_bytes(b"old appimage content")
+
+        appimage = self._create_fake_appimage("TestApp", "2.0.0")
+
+        with (
+            patch("appimage_launcher.core.manager.read_appimage_meta") as mock_read_meta,
+            patch("appimage_launcher.core.manager.compute_full_sha256", return_value="newsha256"),
+            patch("appimage_launcher.core.manager.write_desktop_entry"),
+            patch("appimage_launcher.core.manager.install_icons"),
+            patch("appimage_launcher.core.manager.ensure_executable"),
+            patch("appimage_launcher.core.manager.refresh_caches"),
+            patch("appimage_launcher.core.manager.shutil.copy2") as mock_copy2,
+            patch("appimage_launcher.core.manager.shutil.move") as mock_move,
+        ):
+            # Create mock meta with new version
+            new_meta = self._create_mock_meta(name="TestApp", version="2.0.0")
+            new_meta.size = 2000000  # New size is different
+            mock_read_meta.return_value = new_meta
+
+            # Mock the staging operations
+            def mock_copy2_side_effect(src, dst):
+                Path(dst).write_bytes(b"new appimage content")
+
+            mock_copy2.side_effect = mock_copy2_side_effect
+
+            def mock_move_side_effect(src, dst):
+                Path(dst).write_bytes(b"new appimage content")
+
+            mock_move.side_effect = mock_move_side_effect
+
+            # Perform the replace
+            result = self.manager.install(appimage, conflict_policy="replace")
+
+            # Verify result
+            assert result.changed is True
+            assert result.app.version == "2.0.0"
+            assert result.previous is not None
+
+            # Verify the event log has correct old -> new version
+            events = self.db.get_events()
+            updated_events = [e for e in events if e.kind == "updated"]
+            assert len(updated_events) == 1
+            assert updated_events[0].detail == "Updated 1.0.0 -> 2.0.0"
+
+            # Verify backup record has OLD version (1.0.0) and OLD size (1000000)
+            backups = self.db.get_backups("com.example.testapp")
+            assert len(backups) == 1
+            backup = backups[0]
+            assert backup.version == "1.0.0", (
+                f"Backup should have old version 1.0.0, got {backup.version}"
+            )
+            assert backup.size == 1000000, f"Backup should have old size 1000000, got {backup.size}"
+
+
+class TestSaveUserConfig:
+    """Tests for save_user_config function."""
+
+    def test_save_user_config_raises_on_invalid_toml(self, tmp_path):
+        """Test that save_user_config raises error when existing config.toml is invalid."""
+        import tomllib
+
+        import appimage_launcher.constants as constants
+        from appimage_launcher.config import Config, save_user_config
+
+        # Create a temp config dir
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        original_config_dir = constants.DEFAULT_CONFIG_DIR
+        constants.DEFAULT_CONFIG_DIR = str(config_dir)
+
+        try:
+            # Write invalid TOML to config.toml
+            config_path = config_dir / "config.toml"
+            config_path.write_text("invalid toml [[[")
+
+            # Create a config with a preference to save
+            test_config = Config()
+            test_config.conflict_preferences = {"com.example.testapp": "replace"}
+
+            # save_user_config should raise TOMLDecodeError
+            with pytest.raises(tomllib.TOMLDecodeError):
+                save_user_config(test_config)
+
+            # Verify the file is unchanged (byte-for-byte)
+            assert config_path.read_text() == "invalid toml [[["
+        finally:
+            constants.DEFAULT_CONFIG_DIR = original_config_dir
+
+    def test_save_user_config_raises_on_invalid_utf8(self, tmp_path):
+        """Test that save_user_config raises error when existing config.toml has invalid UTF-8."""
+        import appimage_launcher.constants as constants
+        from appimage_launcher.config import Config, save_user_config
+
+        # Create a temp config dir
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        original_config_dir = constants.DEFAULT_CONFIG_DIR
+        constants.DEFAULT_CONFIG_DIR = str(config_dir)
+
+        try:
+            # Write invalid UTF-8 to config.toml (BOM for UTF-16, not valid UTF-8)
+            config_path = config_dir / "config.toml"
+            config_path.write_bytes(b"\xff\xfe")
+
+            # Create a config with a preference to save
+            test_config = Config()
+            test_config.conflict_preferences = {"com.example.testapp": "replace"}
+
+            # save_user_config should raise UnicodeDecodeError
+            with pytest.raises(UnicodeDecodeError):
+                save_user_config(test_config)
+
+            # Verify the file is unchanged (byte-for-byte)
+            assert config_path.read_bytes() == b"\xff\xfe"
+        finally:
+            constants.DEFAULT_CONFIG_DIR = original_config_dir
+
+    def test_save_user_config_preserves_other_keys(self, tmp_path):
+        """Test that save_user_config preserves other keys in config.toml."""
+        import tomllib
+
+        import tomli_w
+
+        import appimage_launcher.constants as constants
+        from appimage_launcher.config import Config, save_user_config
+
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+
+        original_config_dir = constants.DEFAULT_CONFIG_DIR
+        constants.DEFAULT_CONFIG_DIR = str(config_dir)
+
+        try:
+            # Create initial config with multiple keys
+            config_path = config_dir / "config.toml"
+            initial_config = {
+                "applications_dir": "/custom/path",
+                "install": {"source_action": "move", "conflict_policy": "keep"},
+                "naming": {"template": "{name}-{version}"},
+                "conflict_preferences": {"existing_app": "keep"},
+            }
+            with open(config_path, "wb") as f:
+                tomli_w.dump(initial_config, f)
+
+            # Save new conflict preference
+            test_config = Config()
+            test_config.conflict_preferences = {"com.example.newapp": "replace"}
+            save_user_config(test_config)
+
+            # Verify all keys preserved
+            with open(config_path, "rb") as f:
+                loaded = tomllib.load(f)
+
+            assert loaded["applications_dir"] == "/custom/path"
+            assert loaded["install"]["source_action"] == "move"
+            assert loaded["install"]["conflict_policy"] == "keep"
+            assert loaded["naming"]["template"] == "{name}-{version}"
+            assert loaded["conflict_preferences"]["existing_app"] == "keep"
+            assert loaded["conflict_preferences"]["com.example.newapp"] == "replace"
+        finally:
+            constants.DEFAULT_CONFIG_DIR = original_config_dir
+
+
+class TestConfigCLI:
+    """Tests for config CLI commands."""
+
+    def test_config_list_outputs_valid_toml(self):
+        """Test that config list outputs valid TOML using tomli_w."""
+        import tomllib
+
+        import tomli_w
+
+        from appimage_launcher.config import Config
+
+        config = Config()
+        config.applications_dir = "/custom/apps"
+        config.install.source_action = "move"
+        config.install.conflict_policy = "keep"
+        config.naming.template = "{name}-{version}"
+        config.update.previous_versions_keep = 5
+        config.conflict_preferences = {"com.example.test": "replace"}
+
+        # This is what cmd_config does for "list"
+        toml_output = tomli_w.dumps(config.to_dict())
+
+        # Verify it's valid TOML and can be parsed back
+        parsed = tomllib.loads(toml_output)
+        assert parsed["applications_dir"] == "/custom/apps"
+        assert parsed["install"]["source_action"] == "move"
+        assert parsed["install"]["conflict_policy"] == "keep"
+        assert parsed["naming"]["template"] == "{name}-{version}"
+        assert parsed["update"]["previous_versions_keep"] == 5
+        assert parsed["conflict_preferences"]["com.example.test"] == "replace"
 
 
 if __name__ == "__main__":
