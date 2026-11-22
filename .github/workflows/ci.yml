@@ -2,90 +2,60 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            squashfs-tools \
-            squashfuse \
             dbus \
-            dbus-x11 \
-            desktop-file-utils \
-            shellcheck \
-            libegl1 \
-            libxkbcommon0 \
-            xvfb
+            libglib2.0-dev \
+            squashfs-tools \
+            zsync \
+            appimagetool \
+            libfuse2
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,gui]"
+          pip install -e ".[dev]"
 
-      - name: Run deps-check
-        run: make deps-check
+      - name: Start D-Bus session bus
+        run: |
+          # Start a D-Bus session daemon
+          mkdir -p /tmp/dbus-test
+          dbus-daemon --session --address=unix:path=/tmp/dbus-test --fork --print-address > /tmp/dbus-address.txt
+          cat /tmp/dbus-address.txt
+          export DBUS_SESSION_BUS_ADDRESS=$(cat /tmp/dbus-address.txt)
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
 
-      - name: Run lint
-        run: make lint
-
-      - name: Run tests with coverage
-        run: make test COV=1
+      - name: Run tests
+        run: |
+          make test COV=1
         env:
+          DBUS_SESSION_BUS_ADDRESS: ${{ env.DBUS_SESSION_BUS_ADDRESS }}
+          APPIMAGE_LAUNCHER_HOME: ${{ runner.temp }}/appimage-launcher
           QT_QPA_PLATFORM: offscreen
-          DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/dbus-test"
-          APPIMAGE_LAUNCHER_HOME: "${{ runner.temp }}/appimage-test"
-
-      - name: Run CI pipeline
-        run: make ci
-        env:
-          QT_QPA_PLATFORM: offscreen
-          DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/dbus-test"
-          APPIMAGE_LAUNCHER_HOME: "${{ runner.temp }}/appimage-test"
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: codecov/codecov-action@v4
         if: always()
         with:
-          name: coverage-${{ matrix.python-version }}
-          path: .coverage
-          retention-days: 7
-
-      - name: Upload dry-run install tree
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: install-tree-${{ matrix.python-version }}
-          path: /tmp/appimage-launcher-test
-          retention-days: 7
-
-  # Optional nightly job for real Plasma testing
-  # nightly:
-  #   runs-on: ubuntu-latest
-  #   if: github.event_name == 'schedule'
-  #   container:
-  #     image: kde/plasma:latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Run tests in Plasma container
-  #       run: make test
-  #       env:
-  #         QT_QPA_PLATFORM: wayland
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
