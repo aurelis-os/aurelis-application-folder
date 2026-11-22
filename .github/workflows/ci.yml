@@ -41,9 +41,9 @@ jobs:
 
       - name: Start D-Bus session bus
         run: |
-          # Start a D-Bus session daemon
-          mkdir -p /tmp/dbus-test
-          dbus-daemon --session --address=unix:path=/tmp/dbus-test --fork --print-address > /tmp/dbus-address.txt
+          # Start a D-Bus session daemon with unique socket path
+          DBUS_DIR=$(mktemp -d /tmp/dbus-test.XXXXXX)
+          dbus-daemon --session --address=unix:path=$DBUS_DIR/bus --fork --print-address > /tmp/dbus-address.txt
           cat /tmp/dbus-address.txt
           export DBUS_SESSION_BUS_ADDRESS=$(cat /tmp/dbus-address.txt)
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> $GITHUB_ENV
