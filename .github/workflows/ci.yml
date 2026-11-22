@@ -29,10 +29,10 @@ jobs:
             zsync \
             libfuse2
 
-      - name: Install appimageupdatetool
+      - name: Install appimageupdatetool (optional)
         run: |
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimageupdatetool-x86_64.AppImage -O /usr/local/bin/appimageupdatetool
-          chmod +x /usr/local/bin/appimageupdatetool
+          # appimageupdatetool is not published in AppImageKit releases; fallback to zsync in code
+          echo "Skipping appimageupdatetool install (not available); zsync will be used as fallback"
 
       - name: Install Python dependencies
         run: |
