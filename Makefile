@@ -25,6 +25,8 @@ SYSCONFIG_DIR = $(SYSCONFDIR)/appimage-launcher
 
 # Python package
 PYTHON_PACKAGE = appimage_launcher
+PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c \
+    "import sysconfig; print(sysconfig.get_path('purelib'))")
 
 # Default target
 .DEFAULT_GOAL := help
@@ -43,6 +45,7 @@ help:
 	@echo "  make ci             - Run full CI pipeline (deps-check + lint + test + coverage)"
 	@echo "  make run            - Run daemon in development mode"
 	@echo "  make install        - Install system-wide"
+	@echo "  make install-python-deps  - Install Python runtime deps (check-then-skip)"
 	@echo "  make uninstall      - Uninstall system-wide"
 	@echo "  make package        - Build sdist/tarball"
 	@echo "  make clean          - Remove build artifacts"
@@ -59,6 +62,8 @@ deps-check:
 	@echo "Checking Python packages..."
 	@$(PYTHON) -c "import inotify_simple; print('inotify_simple:', inotify_simple.__version__)" 2>/dev/null || echo "WARNING: inotify_simple not installed"
 	@$(PYTHON) -c "import dbus_fast; print('dbus-fast:', dbus_fast.__version__)" 2>/dev/null || echo "WARNING: dbus-fast not installed"
+	@$(PYTHON) -c "import tomli_w; print('tomli_w:', tomli_w.__version__)" \
+	    2>/dev/null || echo "WARNING: tomli_w not installed"
 	@echo "All dependencies checked."
 
 # Linting
@@ -119,13 +124,58 @@ run:
 
 # Installation
 .PHONY: install
-install: install-python install-bin install-systemd install-dbus install-desktop install-kio install-icons install-completions install-man install-doc install-config
+install: install-python-deps install-python install-bin install-systemd install-dbus \
+         install-desktop install-kio install-icons install-completions \
+         install-man install-doc install-config
 	@if [ -z "$(DESTDIR)" ] && [ -z "$(NO_ENABLE)" ]; then \
 		echo "Enabling systemd user service globally..."; \
 		systemctl --global enable appimage-launcher.service; \
 		echo "Enabled for all users. It starts at each user's next login."; \
 		echo "To start now: systemctl --user enable --now appimage-launcher"; \
 	fi
+
+.PHONY: install-python-deps
+install-python-deps:
+	@echo "Checking and installing Python runtime dependencies..."
+	@for dep_spec in \
+	    "inotify-simple:inotify_simple:1.3.5" \
+	    "dbus-fast:dbus_fast:0.25.0" \
+	    "tomli-w:tomli_w:1.0.0"; do \
+	    pip_name=$$(echo "$$dep_spec" | cut -d: -f1); \
+	    min_ver=$$(echo "$$dep_spec" | cut -d: -f3); \
+	    check_py=$$(printf '%s\n' \
+	        'import sys, os, re' \
+	        'import importlib.metadata as meta' \
+	        'def norm(n): return re.sub(r"[-_.]+", "-", n).lower()' \
+	        'destdir_sp = os.environ.get("_DESTDIR_SP", "")' \
+	        'pkg = sys.argv[1]; ver = sys.argv[2]' \
+	        'req = tuple(int(x) for x in ver.split("."))' \
+	        'if destdir_sp:' \
+	        '    dists = list(meta.distributions(path=[destdir_sp]))' \
+	        'else:' \
+	        '    dists = list(meta.distributions())' \
+	        'found = False' \
+	        'for d in dists:' \
+	        '    name = d.metadata.get("Name", "")' \
+	        '    if name and norm(name) == norm(pkg):' \
+	        '        v = d.metadata.get("Version", "")' \
+	        '        if v:' \
+	        '            cur = tuple(int(x) for x in v.split("."))' \
+	        '            if cur >= req:' \
+	        '                found = True' \
+	        '                break' \
+	        'sys.exit(0 if found else 1)'); \
+	    if _DESTDIR_SP="$(DESTDIR)$(PYTHON_SITE_PACKAGES)" \
+	        $(PYTHON) -c "$$check_py" "$$pip_name" "$$min_ver" 2>/dev/null; then \
+	        echo "  SKIP $$pip_name: already at required version"; \
+	    else \
+	        echo "  INSTALL $$pip_name>=$$min_ver"; \
+	        $(PYTHON) -m pip install --no-deps \
+	            --target "$(DESTDIR)$(PYTHON_SITE_PACKAGES)" \
+	            "$$pip_name>=$$min_ver"; \
+	    fi; \
+	done
+	@echo "Python runtime dependencies satisfied."
 
 .PHONY: install-python
 install-python:
