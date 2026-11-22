@@ -27,7 +27,11 @@ jobs:
             libglib2.0-dev \
             squashfs-tools \
             zsync \
-            libfuse2
+            libfuse2 \
+            libegl1 \
+            libegl-mesa0 \
+            libgl1-mesa-dri \
+            libxkbcommon-x11-0
 
       - name: Install appimageupdatetool (optional)
         run: |
