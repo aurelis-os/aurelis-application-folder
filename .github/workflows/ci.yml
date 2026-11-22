@@ -27,8 +27,12 @@ jobs:
             libglib2.0-dev \
             squashfs-tools \
             zsync \
-            appimageupdatetool \
             libfuse2
+
+      - name: Install appimageupdatetool
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimageupdatetool-x86_64.AppImage -O /usr/local/bin/appimageupdatetool
+          chmod +x /usr/local/bin/appimageupdatetool
 
       - name: Install Python dependencies
         run: |
