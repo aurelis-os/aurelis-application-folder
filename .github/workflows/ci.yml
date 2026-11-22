@@ -27,7 +27,7 @@ jobs:
             libglib2.0-dev \
             squashfs-tools \
             zsync \
-            appimagetool \
+            appimageupdatetool \
             libfuse2
 
       - name: Install Python dependencies
