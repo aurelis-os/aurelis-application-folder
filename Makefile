@@ -49,6 +49,12 @@ help:
 	@echo "  make uninstall      - Uninstall system-wide"
 	@echo "  make package        - Build sdist/tarball"
 	@echo "  make clean          - Remove build artifacts"
+	@echo ""
+	@echo "Variables:"
+	@echo "  SKIP_PYTHON_DEPS=1  - Skip Python dependency installation (use if pre-installed)"
+	@echo "  NO_ENABLE=1         - Skip systemd service enablement"
+	@echo "  PREFIX=/path        - Installation prefix (default: /usr/local)"
+	@echo "  DESTDIR=/path       - Staging directory for packagers"
 
 # Dependency check
 .PHONY: deps-check
@@ -124,9 +130,16 @@ run:
 
 # Installation
 .PHONY: install
+ifeq ($(SKIP_PYTHON_DEPS),1)
+# Skip install-python-deps when SKIP_PYTHON_DEPS=1 (used by build scripts that pre-install deps)
+install: install-python install-bin install-systemd install-dbus \
+         install-desktop install-kio install-icons install-completions \
+         install-man install-doc install-config
+else
 install: install-python-deps install-python install-bin install-systemd install-dbus \
          install-desktop install-kio install-icons install-completions \
          install-man install-doc install-config
+endif
 	@if [ -z "$(DESTDIR)" ] && [ -z "$(NO_ENABLE)" ]; then \
 		echo "Enabling systemd user service globally..."; \
 		systemctl --global enable appimage-launcher.service; \
