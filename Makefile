@@ -137,7 +137,8 @@ install: install-python-deps install-python install-bin install-systemd install-
 .PHONY: install-python-deps
 install-python-deps:
 	@echo "Checking and installing Python runtime dependencies..."
-	@for dep_spec in \
+	@set -e; \
+	for dep_spec in \
 	    "inotify-simple:inotify_simple:1.3.5" \
 	    "dbus-fast:dbus_fast:0.25.0" \
 	    "tomli-w:tomli_w:1.0.0"; do \
@@ -172,7 +173,10 @@ install-python-deps:
 	        echo "  INSTALL $$pip_name>=$$min_ver"; \
 	        $(PYTHON) -m pip install --no-deps \
 	            --target "$(DESTDIR)$(PYTHON_SITE_PACKAGES)" \
-	            "$$pip_name>=$$min_ver"; \
+	            "$$pip_name>=$$min_ver" || { \
+	            echo "ERROR: Failed to install $$pip_name>=$$min_ver" >&2; \
+	            exit 1; \
+	        }; \
 	    fi; \
 	done
 	@echo "Python runtime dependencies satisfied."
