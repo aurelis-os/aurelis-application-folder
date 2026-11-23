@@ -327,6 +327,13 @@ Examples:
     # status command
     subparsers.add_parser("status", help="Show daemon status")
 
+    # daemon command
+    daemon_parser = subparsers.add_parser("daemon", help="Run the observer daemon")
+    daemon_parser.add_argument("--dir", type=Path, help="Applications directory to watch")
+    daemon_parser.add_argument("--no-notify", action="store_true", help="Disable notifications")
+    daemon_parser.add_argument("--no-dialogs", action="store_true", help="Disable dialogs")
+    daemon_parser.add_argument("--dev", action="store_true", help="Development mode")
+
     # export/import commands
     export_parser = subparsers.add_parser("export", help="Export policies, names and flags")
     export_parser.add_argument("file", nargs="?", type=Path, help="Output file (default: stdout)")
@@ -1524,6 +1531,22 @@ def cmd_cleanup(args: argparse.Namespace, manager: Manager | DBusClientManager) 
     return EXIT_OK
 
 
+def cmd_daemon(args: argparse.Namespace, manager: Manager | DBusClientManager) -> int:
+    """Handle daemon command."""
+    import asyncio
+    from appimage_launcher.daemon.app import run_daemon
+
+    asyncio.run(
+        run_daemon(
+            applications_dir=args.dir,
+            no_notify=args.no_notify,
+            no_dialogs=args.no_dialogs,
+            dev_mode=args.dev,
+        )
+    )
+    return EXIT_OK
+
+
 COMMAND_HANDLERS = {
     "install": cmd_install,
     "remove": cmd_remove,
@@ -1550,6 +1573,7 @@ COMMAND_HANDLERS = {
     "import": cmd_import,
     "dedupe": cmd_dedupe,
     "cleanup": cmd_cleanup,
+    "daemon": cmd_daemon,
 }
 
 
